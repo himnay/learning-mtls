@@ -81,6 +81,11 @@ data structure that binds a public key to an identity (the *subject*), signed by
 subject alternative names. Every `.crt` file and every certificate entry inside the
 `.p12` stores below is an X.509 certificate.
 
+The subject is whatever identity the certificate was issued to. In
+`service-consumer-keystore.p12` the subject is `CN=service-consumer` — this module's own
+identity, presented as the client cert to the producer and also as the server cert on
+`:9443`. The CA cert bundled alongside it has itself as subject (it's self-signed).
+
 | File (classpath)                     | Contains | Used for |
 |--------------------------------------|----------|----------|
 | `ssl/service-consumer-keystore.p12`  | private key + cert `CN=service-consumer` (EKU `serverAuth,clientAuth`) + CA cert | Client cert sent to the producer; also server cert for `:9443` |

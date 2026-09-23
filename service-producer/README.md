@@ -99,6 +99,12 @@ data structure that binds a public key to an identity (the *subject*), signed by
 subject alternative names. Every `.crt` file and every certificate entry inside the
 `.p12` stores below is an X.509 certificate.
 
+The subject is whatever identity the certificate was issued to — the CA's own cert has
+itself as subject, and each leaf cert's subject is the service or test identity it was
+issued for. In `service-producer-keystore.p12` the subject is `CN=service-producer`
+(this module's own server identity); the other entries below carry their own subjects,
+e.g. `CN=service-consumer` and `CN=service-unknown` for the test-client certs.
+
 | File (classpath)                         | Contains                                   | Used for |
 |------------------------------------------|--------------------------------------------|----------|
 | `ssl/service-producer-keystore.p12`      | private key + cert `CN=service-producer` (SAN `localhost`, `127.0.0.1`, `service-producer`) + CA cert | Server identity presented to callers |
