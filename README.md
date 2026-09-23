@@ -47,7 +47,7 @@
 18. 🧪 [Insomnia collection](#insomnia)
     - 18.1 [Import the collection](#insomnia-import)
     - 18.2 [Add the CA certificate — before calling any API](#insomnia-ca-certificate)
-    - 18.3 [Add the client certificates — producer calls](#insomnia-client-certificates)
+    - 18.3 [Add the client certificates — required for producer calls](#insomnia-client-certificates)
     - 18.4 [Folders and expected results](#insomnia-folders)
     - 18.5 [Troubleshooting](#insomnia-troubleshooting)
 
@@ -1100,7 +1100,7 @@ Otherwise every request fails TLS verification.
 ```mermaid
 flowchart LR
     A["18.1 Import<br/>insomnia-collection.json"] --> B["18.2 Add CA certificate<br/>insomnia-certs/ca.crt"]
-    B --> C["18.3 Add client certificates<br/>localhost:8443 · 127.0.0.1:8443"]
+    B --> C["18.3 Add client certificates<br/>required for :8443<br/>localhost · 127.0.0.1"]
     C --> D["Send requests"]
     B -. "enough for the<br/>consumer folder" .-> D
 ```
@@ -1147,22 +1147,39 @@ keytool -exportcert -rfc -alias mtls-demo-ca -storepass changeit \
 ```
 
 The CA certificate alone is enough for the *service-consumer* folder: `:9443` doesn't ask for a
-client certificate. The producer on `:8443` also needs 18.3.
+client certificate. **The producer on `:8443` also needs 18.3.** With only the CA certificate,
+producer requests fail with `Failure when receiving data from the peer`.
 
 <a id="insomnia-client-certificates"></a>
-### <span style="color:hsl(300,70%,60%)">18.3 Add the client certificates — producer calls</span>
+### <span style="color:hsl(300,70%,60%)">18.3 Add the client certificates — required for producer calls</span>
 
-In the same *Manage Certificates* dialog, click **Add Client Certificate** twice:
+The producer requires a client certificate (`client-auth: need`). **The CA certificate from 18.2
+is not enough for `:8443`.** If no client certificate is configured for the host, Insomnia sends
+an empty certificate. The producer then rejects the handshake and Insomnia shows
+`Failure when receiving data from the peer`.
 
-| Host | Tab **PFX or PKCS12** — file | Passphrase | Acts as |
-|---|---|---|---|
-| `localhost:8443` | `<repo>/service-consumer/src/main/resources/ssl/service-consumer-keystore.p12` | `changeit` | `CN=service-consumer`: allowed |
-| `127.0.0.1:8443` | `<repo>/service-producer/src/test/resources/ssl/service-unknown-keystore.p12` | `changeit` | `CN=service-unknown`: trusted CA, not allow-listed |
+In the same *Manage Certificates* dialog, click **Add Client Certificate** twice and use the
+**PFX or PKCS12** tab. `<repo>` is the absolute path of your clone.
+
+| Host (exactly this) | File | Passphrase | Used by folder | Acts as |
+|---|---|---|---|---|
+| `localhost:8443` | `<repo>/service-consumer/src/main/resources/ssl/service-consumer-keystore.p12` | `changeit` | *mTLS as service-consumer* | `CN=service-consumer`: allowed |
+| `127.0.0.1:8443` | `<repo>/service-producer/src/test/resources/ssl/service-unknown-keystore.p12` | `changeit` | *mTLS as service-unknown* | `CN=service-unknown`: trusted CA, not allow-listed |
 
 Insomnia picks the client certificate by host, and the producer's certificate is valid for both
 `localhost` and `127.0.0.1` (SAN). So one running producer shows both outcomes: allowed via
 `localhost`, forbidden via `127.0.0.1`. Insomnia's libcurl uses OpenSSL 3.5, which reads the
 committed PKCS#12 stores directly, so client certificates need no PEM conversion.
+
+Check it after adding both:
+
+| Folder → request | Expected |
+|---|---|
+| *mTLS as service-consumer* → **GET — Greeting (fr)** | `200`, `callerCn` = `service-consumer` |
+| *mTLS as service-unknown* → **GET — Producer Health** | `200`: health skips the CN check |
+| *mTLS as service-unknown* → **GET — Greeting (403 Forbidden)** | `403`. This is intended: the certificate is from the trusted CA, but its CN isn't on the producer's allow-list |
+
+For successful greeting calls, use the *mTLS as service-consumer* folder (`localhost:8443`).
 
 <a id="insomnia-folders"></a>
 ### <span style="color:hsl(165,80%,45%)">18.4 Folders and expected results</span>
@@ -1180,7 +1197,17 @@ committed PKCS#12 stores directly, so client certificates need no PEM conversion
 | Insomnia error | Cause | Fix |
 |---|---|---|
 | `SSL peer certificate or SSH remote key was not OK` | No CA certificate, disabled, or a different CA (curl error 60) | 18.2: add `insomnia-certs/ca.crt`, enable it, compare fingerprints |
-| `Failure when receiving data from the peer` on `:8443` | No client certificate matched the host, so the producer aborted the handshake with `certificate_required` (curl 56) | 18.3: add the client certificate for exactly `localhost:8443` / `127.0.0.1:8443` |
+| `Failure when receiving data from the peer` on `:8443` | No client certificate for this host. Usually only the CA certificate from 18.2 is configured. Insomnia sent an empty certificate and the producer aborted the handshake with `certificate_required` (curl 56) | 18.3: add the client certificate for exactly `localhost:8443` / `127.0.0.1:8443` |
 | `Problem with the local SSL certificate` | Wrong passphrase or path for the `.p12` file (curl 58) | Passphrase is `changeit`; re-select the file |
 | `Couldn't connect to server` | Service not running (curl 7) | Start the producer (`:8443`) / consumer (`:9443`) |
 | `403` from the producer via `localhost` | The `localhost:8443` entry points at the wrong `.p12` | Use `service-consumer-keystore.p12` for `localhost:8443` |
+
+To see where a request failed, open the response's **Timeline** tab. For a producer request with
+only the CA certificate configured, it shows:
+
+| Timeline line | Meaning |
+|---|---|
+| `SSL certificate verify ok` | The CA certificate works (18.2 is done) |
+| `TLS handshake, Request CERT (13)` | The producer asks for a client certificate |
+| `(OUT), TLS handshake, Certificate (11)` with no `(OUT) … CERT verify (15)` after it | No client certificate matched the host, so Insomnia sent an empty one |
+| `tlsv13 alert certificate required` | The producer rejected the handshake. Add the client certificates (18.3) |
