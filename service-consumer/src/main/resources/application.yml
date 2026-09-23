@@ -1,0 +1,66 @@
+spring:
+  application:
+    name: service-consumer
+  mvc:
+    problemdetails:
+      enabled: true
+  ssl:
+    bundle:
+      jks:
+        service-consumer:
+          key:
+            alias: service-consumer
+          # Identity: presented as server cert on :9443 AND as client cert when calling the producer
+          keystore:
+            location: ${SSL_KEYSTORE_LOCATION:classpath:ssl/service-consumer-keystore.p12}
+            password: ${KEYSTORE_PASSWORD:changeit}
+            type: PKCS12
+          # Trust anchor used to validate the producer's server certificate
+          truststore:
+            location: ${SSL_TRUSTSTORE_LOCATION:classpath:ssl/truststore.p12}
+            password: ${TRUSTSTORE_PASSWORD:changeit}
+            type: PKCS12
+          options:
+            enabled-protocols: TLSv1.3,TLSv1.2
+
+server:
+  port: 9443
+  ssl:
+    bundle: service-consumer
+
+clients:
+  producer:
+    base-url: ${PRODUCER_URL:https://localhost:8443}
+    ssl-bundle: service-consumer
+    timeout: 5s
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    info:
+      access: read-only
+  info:
+    git:
+      mode: full
+    build:
+      enabled: true
+    env:
+      enabled: true
+    java:
+      enabled: true
+    os:
+      enabled: true
+
+info:
+  app:
+    name: ${spring.application.name}
+    description: mTLS consumer — calls service-producer over HTTPS presenting its client certificate
+    version: 0.0.1-SNAPSHOT
+    downstream: ${clients.producer.base-url}
+
+logging:
+  level:
+    com.org.mtls: INFO

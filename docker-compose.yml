@@ -1,0 +1,26 @@
+services:
+
+  # ── PostgreSQL (backing store for service-producer) ────────────────────────
+  # Schema is owned by Flyway inside service-producer — this container only
+  # provides an empty database.
+  postgres:
+    image: postgres:19beta3  # latest PG 19 beta (Debian trixie); -alpine betas have been unreliable
+    container_name: mtls-postgres
+    ports:
+      - "5434:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-mtls_db}
+      POSTGRES_USER: ${POSTGRES_USER:-mtls}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mtls_s3cret}
+    volumes:
+      - postgres-data:/var/lib/postgresql   # PG18+: mount the parent dir (versioned subdir layout)
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mtls} -d ${POSTGRES_DB:-mtls_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  postgres-data:

@@ -1,0 +1,11 @@
+target/
+.idea/
+*.iml
+.vscode/
+.DS_Store
+logs/
+
+# CA private key + PEM output — never commit. The demo PKCS12 stores under
+# */src/*/resources/ssl/ ARE committed so the project runs out of the box.
+certs/out/
+*.key
