@@ -93,6 +93,12 @@ sequenceDiagram
 
 ### <span style="color:hsl(20,80%,58%)">4.1 Key material</span>
 
+**X.509** is the ITU-T standard that defines the format of a public-key certificate — a
+data structure that binds a public key to an identity (the *subject*), signed by an
+*issuer* (a CA), valid for a given period, and carrying extensions such as key usage and
+subject alternative names. Every `.crt` file and every certificate entry inside the
+`.p12` stores below is an X.509 certificate.
+
 | File (classpath)                         | Contains                                   | Used for |
 |------------------------------------------|--------------------------------------------|----------|
 | `ssl/service-producer-keystore.p12`      | private key + cert `CN=service-producer` (SAN `localhost`, `127.0.0.1`, `service-producer`) + CA cert | Server identity presented to callers |

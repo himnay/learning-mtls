@@ -64,7 +64,7 @@ flowchart LR
 ## <span style="color:hsl(193,80%,58%)">2. 🧩 Modules</span>
 
 | Module | Role | Docs |
-|---|---|---|
+|----|----|----|
 | [`service-producer`](service-producer) | mTLS server; reads greetings from PostgreSQL; CN allow-list; Jasypt-encrypted DB password | [README](service-producer/README.md) |
 | [`service-consumer`](service-consumer) | mTLS client; calls the producer with its client cert via `RestClient` + SSL bundle | [README](service-consumer/README.md) |
 | `docker-compose.yml` | PostgreSQL `19beta3` for the producer (host port 5434) | — |
@@ -436,6 +436,13 @@ The private key **never leaves** the applicant — the CA only sees the public k
 
 <a id="x509-certificate-anatomy"></a>
 ### <span style="color:hsl(300,70%,60%)">7.3 X.509 certificate anatomy</span>
+
+**X.509** is the ITU-T standard that defines the format of a public-key certificate — a
+data structure that binds a public key to an identity (the *subject*), signed by an
+*issuer* (a CA), valid for a given period, and carrying extensions such as key usage and
+subject alternative names. It's the certificate format used by TLS and, in this project,
+by mTLS: every `.crt` file under `certs/out/` and every entry in a `.p12` store is an
+X.509 certificate.
 
 ```
 Certificate
