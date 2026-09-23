@@ -15,9 +15,20 @@
     <description>mTLS consumer — calls service-producer over HTTPS presenting its client certificate</description>
 
     <dependencies>
+        <!-- Version managed by learning-bom (Spring Cloud 2025.1.x) -->
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-openfeign</artifactId>
+        </dependency>
+        <!-- Feign transport on the JDK HttpClient, so the SSL bundle applies via Boot's JdkHttpClientBuilder -->
+        <dependency>
+            <groupId>io.github.openfeign</groupId>
+            <artifactId>feign-java11</artifactId>
+        </dependency>
+        <!-- HttpClientSettings + JdkHttpClientBuilder: SSL bundle and timeouts → java.net.http.HttpClient -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-restclient</artifactId>
+            <artifactId>spring-boot-http-client</artifactId>
         </dependency>
     </dependencies>
 

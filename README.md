@@ -44,6 +44,12 @@
 15. 📖 [Glossary](#glossary)
 16. 🚀 [Quick start](#quick-start)
 17. 🔨 [Maven commands](#maven-commands)
+18. 🧪 [Insomnia collection](#insomnia)
+    - 18.1 [Import the collection](#insomnia-import)
+    - 18.2 [Add the CA certificate — before calling any API](#insomnia-ca-certificate)
+    - 18.3 [Add the client certificates — producer calls](#insomnia-client-certificates)
+    - 18.4 [Folders and expected results](#insomnia-folders)
+    - 18.5 [Troubleshooting](#insomnia-troubleshooting)
 
 <a id="overview"></a>
 ## <span style="color:hsl(278,80%,58%)">1. 🎯 Overview</span>
@@ -68,9 +74,9 @@ flowchart LR
 | Module | Role | Docs |
 |----|----|----|
 | [`service-producer`](service-producer) | mTLS server; reads greetings from PostgreSQL; CN allow-list; Jasypt-encrypted DB password | [README](service-producer/README.md) |
-| [`service-consumer`](service-consumer) | mTLS client; calls the producer with its client cert via `RestClient` + SSL bundle | [README](service-consumer/README.md) |
+| [`service-consumer`](service-consumer) | mTLS client; calls the producer with its client cert via an OpenFeign client (`@FeignClient`) on the SSL bundle | [README](service-consumer/README.md) |
 | `docker-compose.yml` | PostgreSQL `19beta3` for the producer (host port 5434) | — |
-| `certs/out/` (git-ignored) | Shared root CA (`ca.key`, `ca.crt`) + PEM copies for `curl` / `openssl`. Written by the generate scripts, or extracted from the committed stores ([Quick start](#quick-start)) | — |
+| `insomnia-certs` (git-ignored) | Shared root CA (`ca.key`, `ca.crt`) + PEM copies for `curl` / `openssl`. Written by the generate scripts, or extracted from the committed stores ([Quick start](#quick-start)) | — |
 
 <a id="maven-structure"></a>
 ## <span style="color:hsl(331,80%,58%)">3. 🏗️ Maven structure</span>
@@ -87,7 +93,8 @@ org.springframework.boot:spring-boot-starter-parent:4.1.0
 `super-pom` is **not on Maven Central**. The aggregator declares it with an empty `<relativePath/>`,
 so it must already be in your local repository (`mvn install` it from its own project). Its enforcer
 accepts Java 21+ and Maven 3.9+, but `maven.compiler.release` is 25, so the build needs **JDK 25 or
-newer**.
+newer**. `learning-bom` also imports Spring Cloud 2025.1.2, which declares Boot 4.0.x and 4.1.x
+compatible. The consumer's OpenFeign and Feign versions come from there.
 
 <a id="certificates"></a>
 ## <span style="color:hsl(56,80%,50%)">4. 🔑 Certificates and generate scripts</span>
@@ -130,8 +137,11 @@ Things worth knowing before you run them:
   real keystore. The producer's script issues the producer's *test* keystore (the integration-test
   client). They are separate key pairs with different serials, from the same CA and with the same
   CN. The producer accepts both because it only checks the chain and the CN.
-- Both scripts write `certs/out/service-consumer.{crt,key}`, so the PEM pair there belongs to
+- Both scripts write `insomnia-certs`, so the PEM pair there belongs to
   whichever script ran last. Either pair works for `curl`.
+- **`insomnia-certs` exists only on your disk.** No committed store contains it. If you delete
+  `insomnia-certs`, the next script run creates a new CA, so run **both** scripts afterwards. The CA
+  *certificate* can always be re-extracted from a committed truststore ([Quick start](#quick-start), step 3).
 
 <a id="security-goals"></a>
 ## <span style="color:hsl(0,75%,60%)">5. 🛡️ Security goals and threat model</span>
@@ -463,7 +473,7 @@ The private key **never leaves** the applicant — the CA only sees the public k
 data structure that binds a public key to an identity (the *subject*), signed by an
 *issuer* (a CA), valid for a given period, and carrying extensions such as key usage and
 subject alternative names. It's the certificate format used by TLS and, in this project,
-by mTLS: every `.crt` file under `certs/out/` and every entry in a `.p12` store is an
+by mTLS: every `.crt` file under `insomnia-certs` and every entry in a `.p12` store is an
 X.509 certificate.
 
 ```
@@ -524,7 +534,7 @@ flowchart TB
 
 | Field | Checked by | Question it answers |
 |---|---|---|
-| **SAN** (`subjectAltName`) | The **client** (consumer's JDK HttpClient, `curl`) | "Is this cert valid for the host I dialled?" — `https://localhost:8443` must match `DNS:localhost` |
+| **SAN** (`subjectAltName`) | The **client** (consumer's Feign → JDK HttpClient, `curl`) | "Is this cert valid for the host I dialled?" — `https://localhost:8443` must match `DNS:localhost` |
 | **CN** (Common Name) | Our **producer's** `ClientCertificateFilter` | "Which service is calling me?" — must be `service-consumer` |
 
 Modern TLS clients **ignore CN for hostname checks** (RFC 6125) — SAN is mandatory. Calling
@@ -620,7 +630,7 @@ replace it for anything real.
 |---|---|---|
 | **ASN.1** | Abstract schema language all these structures are defined in | — |
 | **DER** | Binary encoding of ASN.1 | inside everything below |
-| **PEM** | Base64(DER) between `-----BEGIN …-----` / `-----END …-----` — text, copy-paste friendly | `certs/out/*.crt`, `*.key` (used by `curl`) |
+| **PEM** | Base64(DER) between `-----BEGIN …-----` / `-----END …-----` — text, copy-paste friendly | `insomnia-certs`, `*.key` (used by `curl`) |
 | **PKCS#1** | RSA-only key format (`BEGIN RSA PRIVATE KEY`) | — |
 | **PKCS#8** | Algorithm-agnostic private key (`BEGIN PRIVATE KEY`; encrypted variant `BEGIN ENCRYPTED PRIVATE KEY`) | `*.key`; inside `.p12` as shrouded keybag |
 | **PKCS#10** | Certificate Signing Request (`BEGIN CERTIFICATE REQUEST`) | `*.csr` (temporary) |
@@ -699,7 +709,7 @@ TLS 1.2:   ECDHE - RSA - AES256-GCM - SHA384
 <a id="negotiated-parameters"></a>
 ### <span style="color:hsl(165,80%,45%)">9.4 What this project actually negotiates</span>
 
-Verified with `openssl s_client` (OpenSSL 3.5) and `-Djavax.net.debug=ssl:handshake` on the consumer (JDK 25):
+Verified with `openssl s_client` (OpenSSL 3.5) and `-Djavax.net.debug=ssl:handshake` on the consumer (JDK 25 and JDK 26 give the same results):
 
 | Parameter | Consumer (JDK) → Producer | `openssl s_client` → Producer | `-tls1_2` forced |
 |---|---|---|---|
@@ -718,7 +728,7 @@ Verified with `openssl s_client` (OpenSSL 3.5) and `-Djavax.net.debug=ssl:handsh
 ```mermaid
 sequenceDiagram
     autonumber
-    participant C as service-consumer<br/>(JDK HttpClient)
+    participant C as service-consumer<br/>(Feign → JDK HttpClient)
     participant P as service-producer<br/>(Tomcat, client-auth=need)
 
     C->>P: ClientHello: versions [1.3,1.2], suites, supported_groups, key_share(X25519 pub A), signature_algorithms, random
@@ -839,7 +849,7 @@ flowchart TB
     TMF --> CTX
     SB --> OPT["options.enabled-protocols<br/>TLSv1.3, TLSv1.2"]
     CTX --> TOM["Tomcat connector :8443 / :9443<br/>server.ssl.bundle + client-auth"]
-    CTX --> HC["JDK HttpClient via<br/>HttpClientSettings.ofSslBundle()<br/>(consumer → producer)"]
+    CTX --> HC["JDK HttpClient via JdkHttpClientBuilder<br/>+ HttpClientSettings.ofSslBundle()<br/>→ Feign Http2Client (consumer → producer)"]
     OPT --> TOM
     OPT --> HC
 ```
@@ -851,18 +861,19 @@ sequenceDiagram
     participant Boot as Spring Boot startup (consumer)
     participant Reg as SslBundles
     participant Tom as Tomcat
-    participant RC as ProducerClientConfig
+    participant FC as ProducerFeignConfiguration<br/>(Feign context of ProducerClient)
     Boot->>Reg: bind spring.ssl.bundle.jks.* → load PKCS12 stores (password → PBKDF2 → decrypt)
     Boot->>Tom: server.ssl.bundle=service-consumer → SSLContext (client-auth none)
     Tom->>Tom: listen https :9443
-    Boot->>RC: create producerRestClient
-    RC->>Reg: getBundle("service-consumer")
-    RC->>RC: HttpClientSettings.ofSslBundle(bundle).withTimeouts(5s, 5s)
-    RC->>RC: ClientHttpRequestFactoryBuilder.detect() → JDK HttpClient with SSLContext
+    Boot->>FC: @EnableFeignClients → build the ProducerClient proxy
+    FC->>Reg: getBundle("service-consumer")
+    FC->>FC: HttpClientSettings.ofSslBundle(bundle).withConnectTimeout(5s)
+    FC->>FC: JdkHttpClientBuilder.build(settings) → JDK HttpClient with SSLContext → Feign Http2Client
 ```
 
 `service-producer` starts the same way with bundle `service-producer`, `client-auth=need` and port
-`:8443`. It creates no `RestClient`.
+`:8443`. It creates no Feign client. Spring Cloud OpenFeign itself has no SSL-bundle support, so the
+consumer supplies its own `feign.Client` ([consumer README](service-consumer/README.md#how-the-consumer-does-mutual-tls)).
 
 | Config | Effect |
 |---|---|
@@ -1055,12 +1066,14 @@ docker compose down
 - **Running from an IDE:** add `JASYPT_ENCRYPTOR_PASSWORD=mtls-demo-master-key` to the
   `ProducerApplication` run configuration's environment variables. Without it, startup fails with
   `Failed to bind properties under 'spring.datasource.password'`.
-- Instead of step 3 you can run both generate scripts (section 4). That also fills `certs/out/`,
+- Instead of step 3 you can run both generate scripts (section 4). That also fills `insomnia-certs`,
   but it creates a new CA and re-issues every committed store.
 - The extracted PEMs include no `ca.key`. If you run a generate script later, it creates a new CA,
   so run **both** scripts.
 - More calls to try (`403`, `404`, handshake failure) are in the
-  [producer README](service-producer/README.md#running-locally).
+  [producer README](service-producer/README.md#running-locally), or in the
+  [Insomnia collection](#insomnia). In Insomnia, add `insomnia-certs/ca.crt` as the CA certificate
+  **before** sending anything ([18.2](#insomnia-ca-certificate)).
 
 <a id="maven-commands"></a>
 ## <span style="color:hsl(30,80%,55%)">17. 🔨 Maven commands</span>
@@ -1076,3 +1089,98 @@ docker compose down
 
 `MtlsIntegrationTest` ends in `Test`, so Surefire runs it in the `test` phase. That means
 `mvn test` and `mvn package` need Docker too, unless you pass `-DskipTests`.
+
+<a id="insomnia"></a>
+## <span style="color:hsl(275,80%,58%)">18. 🧪 Insomnia collection</span>
+
+Insomnia never imports certificates. Its importer only carries workspaces, folders, requests and
+environments. So after importing, set up the certificates **once**, before calling any API.
+Otherwise every request fails TLS verification.
+
+```mermaid
+flowchart LR
+    A["18.1 Import<br/>insomnia-collection.json"] --> B["18.2 Add CA certificate<br/>insomnia-certs/ca.crt"]
+    B --> C["18.3 Add client certificates<br/>localhost:8443 · 127.0.0.1:8443"]
+    C --> D["Send requests"]
+    B -. "enough for the<br/>consumer folder" .-> D
+```
+
+<a id="insomnia-import"></a>
+### <span style="color:hsl(20,80%,58%)">18.1 Import the collection</span>
+
+In Insomnia, choose **Import** and pick [`insomnia-collection.json`](insomnia-collection.json) from the
+repo root. It creates the **learning-mtls** collection with a *Base Environment* (`consumerUrl`,
+`producerUrl`, `producerUrlAsUnknown`) and four folders ([18.4](#insomnia-folders)).
+
+<a id="insomnia-ca-certificate"></a>
+### <span style="color:hsl(80,80%,50%)">18.2 Add the CA certificate — before calling any API</span>
+
+Both services use certificates signed by the private **mTLS Demo Root CA**. Insomnia doesn't
+trust that CA, so without it every request fails with
+`SSL peer certificate or SSH remote key was not OK`.
+
+The CA certificate is [`insomnia-certs/ca.crt`](insomnia-certs/ca.crt). It is public and contains
+no private key.
+
+1. Open the **learning-mtls** collection.
+2. In the sidebar, click **Certificates** (next to *Cookies*). This opens *Manage Certificates*.
+3. Click **Add CA Certificate** and select `<repo>/insomnia-certs/ca.crt`.
+4. Make sure the CA certificate is **enabled**.
+5. Test it: start the consumer and send **GET — Consumer Health**. You should get `200`.
+
+Check that the file matches the CA in the committed truststores. The two SHA-256 fingerprints must
+be identical (`FB:4D:48:…:9D:AD` for the committed demo CA):
+
+```bash
+openssl x509 -in insomnia-certs/ca.crt -noout -fingerprint -sha256
+keytool -list -v -storepass changeit \
+  -keystore service-consumer/src/main/resources/ssl/truststore.p12 | grep SHA256
+```
+
+If the file is missing, or the CA was regenerated with the scripts in section 4, export it again
+from a truststore:
+
+```bash
+mkdir -p insomnia-certs
+keytool -exportcert -rfc -alias mtls-demo-ca -storepass changeit \
+  -keystore service-consumer/src/main/resources/ssl/truststore.p12 -file insomnia-certs/ca.crt
+```
+
+The CA certificate alone is enough for the *service-consumer* folder: `:9443` doesn't ask for a
+client certificate. The producer on `:8443` also needs 18.3.
+
+<a id="insomnia-client-certificates"></a>
+### <span style="color:hsl(300,70%,60%)">18.3 Add the client certificates — producer calls</span>
+
+In the same *Manage Certificates* dialog, click **Add Client Certificate** twice:
+
+| Host | Tab **PFX or PKCS12** — file | Passphrase | Acts as |
+|---|---|---|---|
+| `localhost:8443` | `<repo>/service-consumer/src/main/resources/ssl/service-consumer-keystore.p12` | `changeit` | `CN=service-consumer`: allowed |
+| `127.0.0.1:8443` | `<repo>/service-producer/src/test/resources/ssl/service-unknown-keystore.p12` | `changeit` | `CN=service-unknown`: trusted CA, not allow-listed |
+
+Insomnia picks the client certificate by host, and the producer's certificate is valid for both
+`localhost` and `127.0.0.1` (SAN). So one running producer shows both outcomes: allowed via
+`localhost`, forbidden via `127.0.0.1`. Insomnia's libcurl uses OpenSSL 3.5, which reads the
+committed PKCS#12 stores directly, so client certificates need no PEM conversion.
+
+<a id="insomnia-folders"></a>
+### <span style="color:hsl(165,80%,45%)">18.4 Folders and expected results</span>
+
+| Folder | Host | Client certificate | Shows |
+|---|---|---|---|
+| service-consumer — one-way TLS | `localhost:9443` | none needed | `200` with `upstream.callerCn`, upstream `404`, actuator |
+| service-producer — mTLS as service-consumer | `localhost:8443` | `service-consumer-keystore.p12` | `200`, `404` problem detail, actuator |
+| service-producer — mTLS as service-unknown | `127.0.0.1:8443` | `service-unknown-keystore.p12` | `403` (health `200`, info `403`) |
+| service-producer — no client certificate | `localhost:8443` | disable it first | TLS alert `certificate_required` |
+
+<a id="insomnia-troubleshooting"></a>
+### <span style="color:hsl(0,70%,60%)">18.5 Troubleshooting</span>
+
+| Insomnia error | Cause | Fix |
+|---|---|---|
+| `SSL peer certificate or SSH remote key was not OK` | No CA certificate, disabled, or a different CA (curl error 60) | 18.2: add `insomnia-certs/ca.crt`, enable it, compare fingerprints |
+| `Failure when receiving data from the peer` on `:8443` | No client certificate matched the host, so the producer aborted the handshake with `certificate_required` (curl 56) | 18.3: add the client certificate for exactly `localhost:8443` / `127.0.0.1:8443` |
+| `Problem with the local SSL certificate` | Wrong passphrase or path for the `.p12` file (curl 58) | Passphrase is `changeit`; re-select the file |
+| `Couldn't connect to server` | Service not running (curl 7) | Start the producer (`:8443`) / consumer (`:9443`) |
+| `403` from the producer via `localhost` | The `localhost:8443` entry points at the wrong `.p12` | Use `service-consumer-keystore.p12` for `localhost:8443` |

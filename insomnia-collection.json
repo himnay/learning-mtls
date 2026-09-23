@@ -1,0 +1,197 @@
+{
+  "_type": "export",
+  "__export_format": 4,
+  "__export_date": "2026-09-23T00:00:00.000Z",
+  "__export_source": "learning-mtls.manual",
+  "resources": [
+    {
+      "_id": "wrk_learning_mtls",
+      "_type": "workspace",
+      "parentId": null,
+      "name": "learning-mtls",
+      "scope": "collection",
+      "description": "Mutual-TLS demo: service-consumer (:9443, one-way TLS) calls service-producer (:8443, client-auth=need) with its client certificate.\n\nCertificates are not part of an Insomnia import. Set them once via the collection sidebar → **Certificates**:\n\n1. **Add CA Certificate** → `<repo>/insomnia-certs/ca.crt` (root README → 18.2) — do this before sending any request\n2. **Add Client Certificate** → Host `localhost:8443`, PFX or PKCS12 `<repo>/service-consumer/src/main/resources/ssl/service-consumer-keystore.p12`, Passphrase `changeit`\n3. **Add Client Certificate** → Host `127.0.0.1:8443`, PFX or PKCS12 `<repo>/service-producer/src/test/resources/ssl/service-unknown-keystore.p12`, Passphrase `changeit`"
+    },
+    {
+      "_id": "env_base",
+      "_type": "environment",
+      "parentId": "wrk_learning_mtls",
+      "name": "Base Environment",
+      "data": {
+        "consumerUrl": "https://localhost:9443",
+        "producerUrl": "https://localhost:8443",
+        "producerUrlAsUnknown": "https://127.0.0.1:8443"
+      }
+    },
+    {
+      "_id": "fld_consumer",
+      "_type": "request_group",
+      "parentId": "wrk_learning_mtls",
+      "name": "service-consumer — one-way TLS (localhost:9443)",
+      "description": "No client certificate needed; only the CA certificate. For each request the consumer calls service-producer over mTLS, presenting its own client certificate.",
+      "metaSortKey": 100
+    },
+    {
+      "_id": "req_consumer_hello_fr",
+      "_type": "request",
+      "parentId": "fld_consumer",
+      "name": "GET — Hello via producer (fr)",
+      "description": "Expected: `200`. `upstream.callerCn` = `service-consumer` is the CN the producer read from the consumer's client certificate — proof that mTLS happened.",
+      "method": "GET",
+      "url": "{{ _.consumerUrl }}/api/v1/hello/himansu?lang=fr",
+      "metaSortKey": 110
+    },
+    {
+      "_id": "req_consumer_hello_default",
+      "_type": "request",
+      "parentId": "fld_consumer",
+      "name": "GET — Hello via producer (default lang)",
+      "description": "Expected: `200`, `lang` defaults to `en` → `Hello, himansu!`.",
+      "method": "GET",
+      "url": "{{ _.consumerUrl }}/api/v1/hello/himansu",
+      "metaSortKey": 120
+    },
+    {
+      "_id": "req_consumer_hello_unknown_lang",
+      "_type": "request",
+      "parentId": "fld_consumer",
+      "name": "GET — Hello, unknown language (404)",
+      "description": "Expected: `404` `application/problem+json` — `Greeting not found upstream` (the producer's 404 passed through).",
+      "method": "GET",
+      "url": "{{ _.consumerUrl }}/api/v1/hello/himansu?lang=xx",
+      "metaSortKey": 130
+    },
+    {
+      "_id": "req_consumer_health",
+      "_type": "request",
+      "parentId": "fld_consumer",
+      "name": "GET — Consumer Health",
+      "method": "GET",
+      "url": "{{ _.consumerUrl }}/actuator/health",
+      "metaSortKey": 140
+    },
+    {
+      "_id": "req_consumer_info",
+      "_type": "request",
+      "parentId": "fld_consumer",
+      "name": "GET — Consumer Info",
+      "description": "`app.downstream` shows the producer URL the consumer calls.",
+      "method": "GET",
+      "url": "{{ _.consumerUrl }}/actuator/info",
+      "metaSortKey": 150
+    },
+    {
+      "_id": "fld_producer_allowed",
+      "_type": "request_group",
+      "parentId": "wrk_learning_mtls",
+      "name": "service-producer — mTLS as service-consumer (localhost:8443)",
+      "description": "Uses the client certificate configured for host `localhost:8443`: `service-consumer-keystore.p12`, CN `service-consumer`, which is allow-listed.",
+      "metaSortKey": 200
+    },
+    {
+      "_id": "req_producer_greeting_fr",
+      "_type": "request",
+      "parentId": "fld_producer_allowed",
+      "name": "GET — Greeting (fr)",
+      "description": "Expected: `200` — `Bonjour, himansu !` read from PostgreSQL, `callerCn` = `service-consumer`.",
+      "method": "GET",
+      "url": "{{ _.producerUrl }}/api/v1/greetings/himansu?lang=fr",
+      "metaSortKey": 210
+    },
+    {
+      "_id": "req_producer_greeting_default",
+      "_type": "request",
+      "parentId": "fld_producer_allowed",
+      "name": "GET — Greeting (default lang)",
+      "description": "Expected: `200`, `lang` defaults to `en`. Seeded languages: `en`, `fr`, `es`, `de`, `hi`.",
+      "method": "GET",
+      "url": "{{ _.producerUrl }}/api/v1/greetings/himansu",
+      "metaSortKey": 220
+    },
+    {
+      "_id": "req_producer_greeting_unknown_lang",
+      "_type": "request",
+      "parentId": "fld_producer_allowed",
+      "name": "GET — Greeting, unknown language (404)",
+      "description": "Expected: `404` `application/problem+json` — `No greeting template for language 'xx'`.",
+      "method": "GET",
+      "url": "{{ _.producerUrl }}/api/v1/greetings/himansu?lang=xx",
+      "metaSortKey": 230
+    },
+    {
+      "_id": "req_producer_health",
+      "_type": "request",
+      "parentId": "fld_producer_allowed",
+      "name": "GET — Producer Health",
+      "method": "GET",
+      "url": "{{ _.producerUrl }}/actuator/health",
+      "metaSortKey": 240
+    },
+    {
+      "_id": "req_producer_info",
+      "_type": "request",
+      "parentId": "fld_producer_allowed",
+      "name": "GET — Producer Info",
+      "description": "Expected: `200` — `/actuator/info` requires an allow-listed CN.",
+      "method": "GET",
+      "url": "{{ _.producerUrl }}/actuator/info",
+      "metaSortKey": 250
+    },
+    {
+      "_id": "fld_producer_unknown",
+      "_type": "request_group",
+      "parentId": "wrk_learning_mtls",
+      "name": "service-producer — mTLS as service-unknown (127.0.0.1:8443)",
+      "description": "Uses the client certificate configured for host `127.0.0.1:8443`: `service-unknown-keystore.p12`, CN `service-unknown`. The TLS handshake succeeds (same CA), then the CN allow-list rejects the caller. Same producer as `localhost:8443` — its certificate is valid for both names (SAN).",
+      "metaSortKey": 300
+    },
+    {
+      "_id": "req_unknown_greeting",
+      "_type": "request",
+      "parentId": "fld_producer_unknown",
+      "name": "GET — Greeting (403 Forbidden)",
+      "description": "Expected: `403` — Spring Boot's default error JSON (not a problem detail), because `ClientCertificateFilter` rejects the request before Spring MVC.",
+      "method": "GET",
+      "url": "{{ _.producerUrlAsUnknown }}/api/v1/greetings/himansu",
+      "metaSortKey": 310
+    },
+    {
+      "_id": "req_unknown_health",
+      "_type": "request",
+      "parentId": "fld_producer_unknown",
+      "name": "GET — Producer Health (200, CN check exempt)",
+      "description": "Expected: `200` — `/actuator/health` skips the CN allow-list; the TLS layer still requires a CA-signed client certificate.",
+      "method": "GET",
+      "url": "{{ _.producerUrlAsUnknown }}/actuator/health",
+      "metaSortKey": 320
+    },
+    {
+      "_id": "req_unknown_info",
+      "_type": "request",
+      "parentId": "fld_producer_unknown",
+      "name": "GET — Producer Info (403)",
+      "description": "Expected: `403` — unlike health, `/actuator/info` goes through the CN allow-list.",
+      "method": "GET",
+      "url": "{{ _.producerUrlAsUnknown }}/actuator/info",
+      "metaSortKey": 330
+    },
+    {
+      "_id": "fld_producer_no_cert",
+      "_type": "request_group",
+      "parentId": "wrk_learning_mtls",
+      "name": "service-producer — no client certificate (handshake failure)",
+      "description": "First disable the `localhost:8443` client certificate (sidebar → Certificates), then send. Re-enable it afterwards.",
+      "metaSortKey": 400
+    },
+    {
+      "_id": "req_no_cert_greeting",
+      "_type": "request",
+      "parentId": "fld_producer_no_cert",
+      "name": "GET — Greeting without client cert (TLS alert)",
+      "description": "Expected: no HTTP response. Tomcat (`client-auth: need`) aborts the handshake with TLS alert 116 `certificate_required`; Insomnia reports curl error 56, `Failure when receiving data from the peer`.",
+      "method": "GET",
+      "url": "{{ _.producerUrl }}/api/v1/greetings/himansu",
+      "metaSortKey": 410
+    }
+  ]
+}

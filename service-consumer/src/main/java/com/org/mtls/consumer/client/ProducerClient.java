@@ -1,22 +1,21 @@
 package com.org.mtls.consumer.client;
 
+import com.org.mtls.consumer.config.ProducerFeignConfiguration;
 import java.time.Instant;
-import lombok.RequiredArgsConstructor;
-import org.springframework.stereotype.Component;
-import org.springframework.web.client.RestClient;
+import org.springframework.cloud.openfeign.FeignClient;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestParam;
 
-@Component
-@RequiredArgsConstructor
-public class ProducerClient {
+/**
+ * Declarative OpenFeign client for service-producer. The transport — and with it the mTLS client
+ * identity — comes from {@link ProducerFeignConfiguration}.
+ */
+@FeignClient(name = "service-producer", url = "${clients.producer.base-url}", configuration = ProducerFeignConfiguration.class)
+public interface ProducerClient {
 
-    private final RestClient producerRestClient;
+    @GetMapping("/api/v1/greetings/{name}")
+    Greeting fetchGreeting(@PathVariable("name") String name, @RequestParam("lang") String lang);
 
-    public Greeting fetchGreeting(String name, String lang) {
-        return producerRestClient.get()
-                .uri("/api/v1/greetings/{name}?lang={lang}", name, lang)
-                .retrieve()
-                .body(Greeting.class);
-    }
-
-    public record Greeting(String message, String language, String servedBy, String callerCn, Instant timestamp) {}
+    record Greeting(String message, String language, String servedBy, String callerCn, Instant timestamp) {}
 }

@@ -112,7 +112,7 @@ e.g. `CN=service-consumer` and `CN=service-unknown` for the test-client certs.
 | `src/test/resources/ssl/service-consumer-keystore.p12` | key + cert `CN=service-consumer`, issued by **this** module's script. It's a separate key pair from the consumer module's own keystore | Integration test: allowed client |
 | `src/test/resources/ssl/service-unknown-keystore.p12` | CA-signed, `CN=service-unknown` | Integration test: trusted but forbidden |
 
-Regenerate with this module's own script (shares the root CA in `../certs/out` with the consumer's script):
+Regenerate with this module's own script (shares the root CA in `../insomnia-certs` with the consumer's script):
 
 ```bash
 service-producer/src/main/resources/ssl/generate-certs.sh
@@ -419,7 +419,7 @@ mvn spring-boot:run                              # DevTools restarts on recompil
 
 In an IDE, set the same variable in the run configuration ([6.1](#jasypt-configuration)).
 
-Smoke test with `curl`. The PEM files live in `certs/out/`, which is git-ignored; on a fresh clone,
+Smoke test with `curl`. The PEM files live in `../insomnia-certs`, which is git-ignored; on a fresh clone,
 create them first ([root README → Quick start](../README.md#quick-start), step 3):
 
 ```bash
@@ -492,7 +492,7 @@ service-producer
 
 - The `.p12` stores in `src/*/resources/ssl` are **demo material** committed so the project runs
   out of the box. Real deployments mount stores from a secret manager and set
-  `SSL_KEYSTORE_LOCATION=file:/…`. The CA private key (`certs/out/ca.key`) is never committed.
+  `SSL_KEYSTORE_LOCATION=file:/…`. The CA private key (`../insomnia-certs`) is never committed.
 - Replace `changeit` and the demo Jasypt master key; inject both via env/secret store.
 - Consider short-lived certs (cert-manager, Vault PKI, SPIFFE/SPIRE) and enabling
   `spring.ssl.bundle.jks.*.reload-on-update` with file-based stores for hot rotation.
