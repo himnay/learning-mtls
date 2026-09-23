@@ -1,4 +1,4 @@
-package com.org.mtls.consumer.client;
+package com.org.mtls.consumer.config;
 
 import org.springframework.boot.http.client.ClientHttpRequestFactoryBuilder;
 import org.springframework.boot.http.client.HttpClientSettings;

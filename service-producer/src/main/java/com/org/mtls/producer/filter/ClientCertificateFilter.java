@@ -1,5 +1,6 @@
-package com.org.mtls.producer.security;
+package com.org.mtls.producer.filter;
 
+import com.org.mtls.producer.config.MtlsProperties;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;

@@ -1,4 +1,4 @@
-package com.org.mtls.producer.greeting;
+package com.org.mtls.producer.entites;
 
 import org.springframework.data.annotation.Id;
 import org.springframework.data.relational.core.mapping.Table;

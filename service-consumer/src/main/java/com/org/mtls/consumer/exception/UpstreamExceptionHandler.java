@@ -1,4 +1,4 @@
-package com.org.mtls.consumer.web;
+package com.org.mtls.consumer.exception;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;

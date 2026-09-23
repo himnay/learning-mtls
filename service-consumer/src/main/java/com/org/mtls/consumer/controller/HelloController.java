@@ -1,4 +1,4 @@
-package com.org.mtls.consumer.web;
+package com.org.mtls.consumer.controller;
 
 import com.org.mtls.consumer.client.ProducerClient;
 import com.org.mtls.consumer.client.ProducerClient.Greeting;

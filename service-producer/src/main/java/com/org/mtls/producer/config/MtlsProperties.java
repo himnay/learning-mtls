@@ -1,4 +1,4 @@
-package com.org.mtls.producer.security;
+package com.org.mtls.producer.config;
 
 import java.util.Set;
 import org.springframework.boot.context.properties.ConfigurationProperties;

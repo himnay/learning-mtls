@@ -3,7 +3,7 @@ package com.org.mtls.producer;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.org.mtls.producer.greeting.GreetingController.Greeting;
+import com.org.mtls.producer.controller.GreetingController.Greeting;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.restclient.autoconfigure.RestClientSsl;

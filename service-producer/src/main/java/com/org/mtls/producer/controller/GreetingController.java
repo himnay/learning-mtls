@@ -1,6 +1,8 @@
-package com.org.mtls.producer.greeting;
+package com.org.mtls.producer.controller;
 
-import com.org.mtls.producer.security.ClientCertificateFilter;
+import com.org.mtls.producer.entites.GreetingTemplate;
+import com.org.mtls.producer.repository.GreetingTemplateRepository;
+import com.org.mtls.producer.filter.ClientCertificateFilter;
 import java.time.Instant;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;

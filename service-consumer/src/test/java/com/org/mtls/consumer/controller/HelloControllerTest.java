@@ -1,4 +1,4 @@
-package com.org.mtls.consumer.web;
+package com.org.mtls.consumer.controller;
 
 import static org.mockito.BDDMockito.given;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;

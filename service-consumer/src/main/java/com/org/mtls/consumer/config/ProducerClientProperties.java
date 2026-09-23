@@ -1,4 +1,4 @@
-package com.org.mtls.consumer.client;
+package com.org.mtls.consumer.config;
 
 import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
