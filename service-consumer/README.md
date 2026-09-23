@@ -5,7 +5,7 @@
 1. 🧰 [Stack](#stack)
 2. 🎯 [What this service does](#what-this-service-does)
 3. ✨ [Features used](#features-used)
-4. 🔐 [How the consumer does mutual TLS](#how-the-consumer-does-mutual-tls) — concepts: [PKI & TLS](../README.md#pki-and-tls-concepts)
+4. 🔐 [How the consumer does mutual TLS](#how-the-consumer-does-mutual-tls) — concepts: [Security, TLS & encryption](../README.md#security-goals)
 5. 🌐 [API](#api)
 6. 🚨 [Error mapping](#error-mapping)
 7. ⚙️ [Configuration reference](#configuration-reference)
@@ -89,7 +89,7 @@ service-consumer/src/main/resources/ssl/generate-certs.sh
 It creates the CA on first run, issues a fresh `service-consumer` key + certificate and
 rebuilds `truststore.p12`. The script is excluded from the jar. Keystore vs truststore,
 X.509 fields, PKCS#12 and the mTLS handshake are explained in
-[PKI & TLS concepts](../README.md#pki-and-tls-concepts).
+[root README — PKI, keystores, TLS handshake](../README.md#pki).
 
 ### <span style="color:hsl(80,80%,50%)">4.2 Wiring</span>
 

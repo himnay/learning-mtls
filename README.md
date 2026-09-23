@@ -6,29 +6,58 @@
 2. 🧩 [Modules](#modules)
 3. 🏗️ [Maven structure](#maven-structure)
 4. 🔑 [Certificates and generate scripts](#certificates)
-5. 📚 [PKI & TLS concepts](#pki-and-tls-concepts)
-    - 5.1 [Keys, certificates and CAs](#keys-certificates-and-cas)
-    - 5.2 [X.509 certificate anatomy](#x509-certificate-anatomy)
-    - 5.3 [Keystore vs truststore](#keystore-vs-truststore)
-    - 5.4 [File formats — PEM, DER, PKCS#1/#8/#10/#12, JKS](#file-formats)
-    - 5.5 [The mTLS handshake step by step](#the-mtls-handshake)
-    - 5.6 [What each script command does](#what-each-script-command-does)
-    - 5.7 [Inspecting the material](#inspecting-the-material)
-6. 🚀 [Quick start](#quick-start)
-7. 🔨 [Maven commands](#maven-commands)
+5. 🛡️ [Security goals and threat model](#security-goals)
+6. 🧮 [Cryptographic building blocks](#crypto-building-blocks)
+    - 6.1 [Symmetric encryption — AES](#symmetric-encryption)
+    - 6.2 [Asymmetric cryptography — RSA and elliptic curves](#asymmetric-cryptography)
+    - 6.3 [Hash functions — SHA-2](#hash-functions)
+    - 6.4 [MAC and HMAC](#mac-and-hmac)
+    - 6.5 [Digital signatures — RSA-PSS](#digital-signatures)
+    - 6.6 [Key exchange — ECDHE and forward secrecy](#key-exchange)
+    - 6.7 [Key derivation — HKDF and PBKDF2](#key-derivation)
+    - 6.8 [AEAD — AES-GCM](#aead)
+    - 6.9 [Salt, IV, nonce and randomness](#salt-iv-nonce)
+7. 📜 [PKI — keys, certificates and CAs](#pki)
+    - 7.1 [Certificate Authority and chain of trust](#chain-of-trust)
+    - 7.2 [How a certificate is issued (CSR flow)](#csr-flow)
+    - 7.3 [X.509 certificate anatomy](#x509-certificate-anatomy)
+    - 7.4 [Certificate path validation (PKIX)](#path-validation)
+    - 7.5 [Hostname verification — SAN vs CN](#hostname-verification)
+    - 7.6 [Revocation — CRL and OCSP](#revocation)
+8. 🗄️ [Keystores, truststores and file formats](#stores-and-formats)
+    - 8.1 [Keystore vs truststore](#keystore-vs-truststore)
+    - 8.2 [PKCS#12 internals — how a `.p12` is protected](#pkcs12-internals)
+    - 8.3 [File formats — PEM, DER, PKCS#1/#8/#10/#12, JKS](#file-formats)
+9. 🔐 [TLS protocol](#tls-protocol)
+    - 9.1 [TLS layers — handshake and record protocol](#tls-layers)
+    - 9.2 [TLS 1.2 vs TLS 1.3](#tls12-vs-tls13)
+    - 9.3 [Cipher suite anatomy](#cipher-suites)
+    - 9.4 [What this project actually negotiates](#negotiated-parameters)
+    - 9.5 [The mTLS handshake step by step](#the-mtls-handshake)
+    - 9.6 [TLS 1.3 key schedule](#key-schedule)
+    - 9.7 [TLS alerts and what they mean](#tls-alerts)
+10. 🧷 [Authentication vs authorization](#authn-vs-authz)
+11. 🌱 [How Spring Boot wires TLS (SSL bundles → JSSE)](#spring-ssl-wiring)
+12. 🔑 [Secrets at rest — Jasypt `ENC(...)`](#secrets-at-rest)
+13. 🔍 [Inspecting and debugging](#inspecting-the-material)
+14. 🏭 [Production hardening checklist](#production-hardening)
+15. 📖 [Glossary](#glossary)
+16. 🚀 [Quick start](#quick-start)
+17. 🔨 [Maven commands](#maven-commands)
 
 <a id="overview"></a>
 ## <span style="color:hsl(278,80%,58%)">1. 🎯 Overview</span>
 
 Two Spring Boot 4.1 services that talk over **HTTPS with mutual TLS**: each side proves its
 identity with an X.509 certificate issued by a private demo CA, and each side validates the
-other's certificate.
+other's certificate. The producer stores data in PostgreSQL and keeps its DB password
+encrypted in configuration.
 
 ```mermaid
 flowchart LR
-    curl -- "HTTPS" --> C["service-consumer<br/>:9443"]
-    C -- "mTLS<br/>client cert CN=service-consumer" --> P["service-producer<br/>:8443 · client-auth=need"]
-    P -- "JDBC · Flyway" --> DB[("PostgreSQL 19<br/>:5434")]
+    curl -- "HTTPS (one-way TLS)" --> C["service-consumer<br/>:9443"]
+    C -- "mTLS · TLS 1.3<br/>client cert CN=service-consumer" --> P["service-producer<br/>:8443 · client-auth=need"]
+    P -- "JDBC · password = ENC(...)" --> DB[("PostgreSQL 19<br/>:5434")]
 ```
 
 <a id="modules"></a>
@@ -61,147 +90,800 @@ Each module owns a script next to its stores:
 | `service-producer/src/main/resources/ssl/generate-certs.sh` | `main/…/ssl/service-producer-keystore.p12`, `main/…/ssl/truststore.p12`, `test/…/ssl/service-consumer-keystore.p12`, `test/…/ssl/service-unknown-keystore.p12` |
 | `service-consumer/src/main/resources/ssl/generate-certs.sh` | `main/…/ssl/service-consumer-keystore.p12`, `main/…/ssl/truststore.p12` |
 
-Both sign with the **same root CA** in `certs/out/`. Whichever script runs first creates it;
-the other reuses it. If the CA is ever recreated, run **both** scripts so both truststores
-contain the new CA. Scripts are excluded from the jars (`maven-jar-plugin`).
+```mermaid
+flowchart TB
+    subgraph shared ["certs/out (git-ignored)"]
+        CA["ca.key + ca.crt<br/>mTLS Demo Root CA"]
+    end
+    PS["service-producer/…/ssl/generate-certs.sh"] -- "create CA if missing,<br/>sign leaf certs" --> CA
+    CS["service-consumer/…/ssl/generate-certs.sh"] -- "create CA if missing,<br/>sign leaf cert" --> CA
+    PS --> P1["main: service-producer-keystore.p12<br/>main: truststore.p12"]
+    PS --> P2["test: service-consumer-keystore.p12<br/>test: service-unknown-keystore.p12"]
+    CS --> C1["main: service-consumer-keystore.p12<br/>main: truststore.p12"]
+```
+
+Both scripts sign with the **same root CA**. Whichever runs first creates it; the other reuses
+it. If the CA is ever recreated, run **both** scripts so both truststores contain the new CA.
+Scripts are excluded from the jars (`maven-jar-plugin`). The committed `.p12` files are demo
+material so the project runs out of the box; `ca.key` is never committed.
 
 ```bash
 service-consumer/src/main/resources/ssl/generate-certs.sh
 service-producer/src/main/resources/ssl/generate-certs.sh
 ```
 
-The committed `.p12` files are demo material so the project runs out of the box; `ca.key`
-is never committed.
+<a id="security-goals"></a>
+## <span style="color:hsl(0,75%,60%)">5. 🛡️ Security goals and threat model</span>
 
-<a id="pki-and-tls-concepts"></a>
-## <span style="color:hsl(200,80%,55%)">5. 📚 PKI & TLS concepts</span>
+| Goal | Meaning | Provided here by |
+|---|---|---|
+| **Confidentiality** | Only the two endpoints can read the traffic | TLS record encryption (AES-256-GCM) |
+| **Integrity** | Tampering is detected | AEAD tag (GCM) on every TLS record |
+| **Server authentication** | Consumer knows it's really talking to the producer | Producer cert chains to trusted CA + SAN matches host + `CertificateVerify` |
+| **Client authentication** | Producer knows it's really the consumer | `client-auth: need` + consumer cert + `CertificateVerify` |
+| **Authorization** | Authenticated caller is *allowed* to call this API | `ClientCertificateFilter` CN allow-list |
+| **Forward secrecy** | Stolen long-term key can't decrypt past traffic | Ephemeral ECDHE (X25519) key exchange |
+| **Secrets at rest** | DB password not readable from config | Jasypt `ENC(...)` (PBKDF2 + AES-256-CBC) |
 
-<a id="keys-certificates-and-cas"></a>
-### <span style="color:hsl(20,80%,58%)">5.1 Keys, certificates and CAs</span>
+```mermaid
+flowchart LR
+    subgraph untrusted ["Untrusted network"]
+        ATT(["Attacker:<br/>sniff · modify · impersonate"])
+    end
+    subgraph c ["service-consumer"]
+        CK["keystore<br/>(private key)"]
+        CT["truststore<br/>(CA)"]
+    end
+    subgraph p ["service-producer"]
+        PK["keystore<br/>(private key)"]
+        PT["truststore<br/>(CA)"]
+        F["CN allow-list"]
+        J["Jasypt master key<br/>(env var)"]
+    end
+    c <-- "TLS 1.3 tunnel" --> p
+    ATT -. "sees only ciphertext" .-> c
+    p -- "JDBC" --> DB[("PostgreSQL")]
+```
+
+| Threat | Without mTLS | Control in this project | What the attacker sees |
+|---|---|---|---|
+| Eavesdropping on the wire | Reads JSON, names | AES-256-GCM record encryption | Random-looking bytes |
+| Man-in-the-middle posing as producer | Consumer talks to attacker | Consumer validates producer chain + SAN + `CertificateVerify` | Handshake fails: `PKIX path building failed` |
+| Unknown client calling producer | Anyone can call the API | `client-auth: need` | Handshake fails (no/untrusted cert) |
+| Valid-but-wrong service calling producer | — | CN allow-list | `403 Forbidden` |
+| Replay / reorder of records | — | TLS sequence numbers inside AEAD nonce | Records rejected, connection closed |
+| Private key stolen later | Past traffic decryptable (static RSA) | ECDHE forward secrecy | Past sessions stay secret |
+| Config file / repo leak | DB password exposed | Jasypt `ENC(...)`, master key only in env | Ciphertext only |
+| Downgrade to old TLS | Weak protocol negotiated | `enabled-protocols: TLSv1.3,TLSv1.2` | TLS 1.1 refused (`protocol_version` alert) |
+
+<a id="crypto-building-blocks"></a>
+## <span style="color:hsl(200,80%,55%)">6. 🧮 Cryptographic building blocks</span>
+
+Everything in TLS and in Jasypt is assembled from a small set of primitives.
+
+```mermaid
+flowchart TB
+    subgraph prim ["Primitives"]
+        AES["AES<br/>symmetric cipher"]
+        RSA["RSA<br/>asymmetric"]
+        EC["X25519 / ECDH<br/>key agreement"]
+        SHA["SHA-256/384/512<br/>hash"]
+        RNG["CSPRNG<br/>random bytes"]
+    end
+    subgraph built ["Built from primitives"]
+        HMAC["HMAC = hash + key"]
+        SIG["Signature = hash + RSA-PSS"]
+        HKDF["HKDF = HMAC-based KDF"]
+        PBKDF2["PBKDF2 = iterated HMAC"]
+        GCM["AES-GCM = AES + GHASH (AEAD)"]
+        CBC["AES-CBC + IV"]
+    end
+    subgraph uses ["Used by"]
+        TLS["TLS 1.3 handshake + records"]
+        CERT["X.509 certificates"]
+        P12["PKCS#12 stores"]
+        JAS["Jasypt ENC(...)"]
+    end
+    SHA --> HMAC --> HKDF --> TLS
+    HMAC --> PBKDF2
+    SHA --> SIG
+    RSA --> SIG --> CERT
+    SIG --> TLS
+    EC --> TLS
+    AES --> GCM --> TLS
+    AES --> CBC
+    PBKDF2 --> P12
+    CBC --> P12
+    PBKDF2 --> JAS
+    CBC --> JAS
+    RNG --> TLS
+    RNG --> JAS
+```
+
+<a id="symmetric-encryption"></a>
+### <span style="color:hsl(20,80%,58%)">6.1 Symmetric encryption — AES</span>
+
+One **shared secret key** both encrypts and decrypts. Fast (hardware AES-NI), used for bulk data.
+
+| Property | Value |
+|---|---|
+| Algorithm | AES (Rijndael), NIST standard |
+| Block size | 128 bits (16 bytes) |
+| Key sizes | 128 / 192 / **256** bits — this project uses AES-256 everywhere |
+| Problem | Both sides need the same key → how do they agree on it over an untrusted network? → **key exchange** (6.6) |
+
+A block cipher alone only encrypts one 16-byte block, so it needs a **mode of operation**:
+
+| Mode | How | Used in | Notes |
+|---|---|---|---|
+| **CBC** | each block XOR-ed with previous ciphertext block; first block with an **IV** | Jasypt, PKCS#12 | Needs padding; no built-in integrity |
+| **GCM** | counter mode + GHASH authentication tag | TLS 1.3 / 1.2 records | **AEAD** — encryption + integrity in one (6.8) |
+
+<a id="asymmetric-cryptography"></a>
+### <span style="color:hsl(80,80%,50%)">6.2 Asymmetric cryptography — RSA and elliptic curves</span>
+
+A **key pair**: the **private key** stays secret, the **public key** is shared freely (inside a
+certificate). What one key does, only the other can undo/verify.
+
+```mermaid
+flowchart LR
+    subgraph owner ["service-producer"]
+        PRIV["🔒 private key<br/>(keystore only)"]
+    end
+    PUB["🔓 public key<br/>(inside certificate — public)"]
+    PRIV -- "mathematically linked" --- PUB
+    PRIV -- "sign" --> S["signature"]
+    S -- "verify with" --> PUB
+```
+
+| Algorithm | Based on | Role here | Size |
+|---|---|---|---|
+| **RSA** | Difficulty of factoring large numbers | Certificate keys; signing `CertificateVerify`; CA signing certs | 2048-bit leaves, 4096-bit CA |
+| **X25519** (ECDH on Curve25519) | Elliptic-curve discrete log | Ephemeral TLS key exchange | 253-bit (~128-bit security) |
+| ECDSA / Ed25519 | Elliptic curves | Alternative cert key types (not used here) | — |
+
+In TLS 1.3, **RSA is only used for signatures**, never to encrypt the session key — that job
+belongs to ECDHE, which is what gives forward secrecy.
+
+<a id="hash-functions"></a>
+### <span style="color:hsl(300,70%,60%)">6.3 Hash functions — SHA-2</span>
+
+A hash maps any input to a fixed-size **fingerprint**. One-way (can't reverse), collision-resistant
+(can't find two inputs with the same hash), avalanche (1-bit change → totally different output).
+
+| Function | Output | Used for |
+|---|---|---|
+| SHA-256 | 32 bytes | Cert signatures (`sha256WithRSAEncryption`), RSA-PSS in handshake, PKCS#12 MAC, cert fingerprints |
+| SHA-384 | 48 bytes | TLS 1.3 transcript hash + HKDF for `TLS_AES_256_GCM_SHA384` |
+| SHA-512 | 64 bytes | Jasypt's HMAC-SHA512 inside PBKDF2 |
+
+<a id="mac-and-hmac"></a>
+### <span style="color:hsl(165,80%,45%)">6.4 MAC and HMAC</span>
+
+A **MAC** (Message Authentication Code) is a keyed checksum: only someone with the key can
+produce or verify it, so it proves **integrity + origin** for symmetric-key holders.
+
+**HMAC** builds a MAC from a hash: `HMAC(K, m) = H((K ⊕ opad) ‖ H((K ⊕ ipad) ‖ m))`.
+
+| Where HMAC appears | Purpose |
+|---|---|
+| TLS 1.3 `Finished` message | HMAC over the whole handshake transcript — proves nobody altered any handshake message |
+| HKDF (TLS key schedule) | Extract/expand keys from the ECDHE secret |
+| PBKDF2 (PKCS#12, Jasypt) | Pseudo-random function iterated over password + salt |
+| PKCS#12 integrity MAC | HMAC-SHA256 over the whole `.p12` — detects tampering / wrong password |
+
+<a id="digital-signatures"></a>
+### <span style="color:hsl(45,80%,50%)">6.5 Digital signatures — RSA-PSS</span>
+
+A signature is "a MAC anyone can verify": created with the **private** key, verified with the
+**public** key. It proves the signer holds the private key and the data wasn't changed.
+
+```mermaid
+sequenceDiagram
+    participant S as Signer (holds private key)
+    participant V as Verifier (has public key from certificate)
+    S->>S: h = SHA-256(message)
+    S->>S: sig = RSA-PSS-Sign(privateKey, h, random salt)
+    S->>V: message + sig
+    V->>V: h' = SHA-256(message)
+    V->>V: RSA-PSS-Verify(publicKey, h', sig)
+    Note over V: valid → signer owns the key AND message unchanged
+```
+
+| Signature | Where | Scheme |
+|---|---|---|
+| CA → certificate | Each cert's body signed by CA key | `sha256WithRSAEncryption` (PKCS#1 v1.5) |
+| Server `CertificateVerify` | Producer signs handshake transcript | `rsa_pss_rsae_sha256` (verified with `openssl s_client`) |
+| Client `CertificateVerify` | Consumer signs handshake transcript | `rsa_pss_rsae_sha256` |
+
+**PSS** (Probabilistic Signature Scheme) adds a random salt to each signature and has a
+security proof; TLS 1.3 **requires** PSS for RSA handshake signatures (PKCS#1 v1.5 is only
+allowed inside certificates).
+
+<a id="key-exchange"></a>
+### <span style="color:hsl(260,60%,65%)">6.6 Key exchange — ECDHE and forward secrecy</span>
+
+**Diffie-Hellman** lets two parties derive the same secret over a public channel without ever
+sending it. **E**phemeral **E**lliptic-**C**urve DH (ECDHE) does this with a fresh key pair per
+connection.
+
+```mermaid
+sequenceDiagram
+    participant C as Consumer
+    participant P as Producer
+    C->>C: random a → public A = a·G (X25519)
+    P->>P: random b → public B = b·G
+    C->>P: key_share A (ClientHello)
+    P->>C: key_share B (ServerHello)
+    C->>C: secret = a·B
+    P->>P: secret = b·A
+    Note over C,P: a·B = a·b·G = b·A → same shared secret<br/>attacker sees only A and B — can't compute it
+    Note over C,P: a and b are discarded after the handshake
+```
+
+**Forward secrecy:** because `a` and `b` are thrown away, recording today's traffic and
+stealing `service-producer`'s RSA private key next year **does not** let anyone decrypt it —
+the RSA key only *signed* the handshake, it never protected the session key.
+
+**Why the signature matters:** plain DH is anonymous — a MITM could run DH with both sides.
+The server's `CertificateVerify` signature (and the client's, in mTLS) binds the DH values to
+certificate identities, defeating the MITM.
+
+<a id="key-derivation"></a>
+### <span style="color:hsl(120,60%,45%)">6.7 Key derivation — HKDF and PBKDF2</span>
+
+A **KDF** turns some secret material into one or more properly-sized cryptographic keys.
+
+| KDF | Input | Speed | Used by |
+|---|---|---|---|
+| **HKDF** (HMAC-based extract-and-expand, RFC 5869) | High-entropy secret (ECDHE output) | Fast — input is already strong | TLS 1.3 key schedule (9.6) |
+| **PBKDF2** (PKCS#5 v2, RFC 8018) | Low-entropy **password** + salt | **Deliberately slow** (iterations) to resist guessing | PKCS#12 stores (2048–10000 iters), Jasypt (1000 iters) |
+
+```mermaid
+flowchart LR
+    PW["password<br/>(changeit / master key)"] --> KDF["PBKDF2<br/>PRF = HMAC-SHA256/512<br/>× N iterations"]
+    SALT["random salt"] --> KDF
+    KDF --> KEY["256-bit AES key"]
+    KEY --> AES["AES-256-CBC"]
+    IV["random IV"] --> AES
+    DATA["plaintext"] --> AES --> CT["ciphertext"]
+```
+
+<a id="aead"></a>
+### <span style="color:hsl(30,80%,55%)">6.8 AEAD — AES-GCM</span>
+
+**A**uthenticated **E**ncryption with **A**ssociated **D**ata encrypts *and* authenticates in
+one step. Every TLS 1.3 record is AEAD-protected.
+
+```mermaid
+flowchart LR
+    K["write key<br/>(from HKDF)"] --> G["AES-256-GCM"]
+    N["nonce = write_iv ⊕ sequence#"] --> G
+    AD["associated data<br/>(record header)"] --> G
+    PT["plaintext HTTP bytes"] --> G
+    G --> CT["ciphertext"]
+    G --> TAG["16-byte auth tag"]
+```
+
+- Receiver recomputes the tag; any flipped bit → tag mismatch → `bad_record_mac` alert, connection dropped.
+- The nonce includes the **record sequence number**, so replayed or reordered records fail.
+- Contrast: AES-CBC (Jasypt, PKCS#12) needs a separate MAC for integrity — PKCS#12 adds an HMAC-SHA256; Jasypt relies on padding checks.
+
+<a id="salt-iv-nonce"></a>
+### <span style="color:hsl(340,70%,60%)">6.9 Salt, IV, nonce and randomness</span>
+
+| Term | Secret? | Must be | Feeds | Purpose | Examples here |
+|---|---|---|---|---|---|
+| **Salt** | No — stored in clear | Random, unique per derivation | KDF (PBKDF2) | Same password → different key; defeats rainbow tables and cross-value comparison | 16 B in Jasypt `ENC`, 8–20 B in `.p12` |
+| **IV** (Initialisation Vector) | No — stored in clear | Unpredictable for CBC | Cipher (CBC) | Same key + same plaintext → different ciphertext | 16 B in Jasypt `ENC` and `.p12` |
+| **Nonce** ("number used once") | No | **Never repeat** with the same key | Cipher (GCM) | Uniqueness of every encryption; repeat = catastrophic | TLS record nonce = IV ⊕ seq# |
+| **Random** (ClientHello/ServerHello) | No | Fresh per handshake | Key schedule | Makes every session's keys unique; anti-replay | 32 B each |
+| **Ephemeral key** | **Yes** — discarded after use | Fresh per handshake | ECDHE | Forward secrecy | X25519 key share |
+
+All of these come from a **CSPRNG** (`SecureRandom` in Java, `/dev/urandom`-backed in OpenSSL).
+Weak randomness breaks everything above it.
+
+<a id="pki"></a>
+## <span style="color:hsl(193,80%,58%)">7. 📜 PKI — keys, certificates and CAs</span>
 
 | Term | What it is | In this project |
 |---|---|---|
-| **Key pair** | Asymmetric pair: a **private key** (secret, signs / decrypts) and its **public key** (shared, verifies / encrypts). Knowing the public key does not reveal the private key. | RSA-2048 per service, RSA-4096 for the CA |
-| **Certificate** | A signed statement: *"this public key belongs to this identity, for these purposes, until this date"*. | `service-producer.crt`, `service-consumer.crt`, … |
-| **CA** (Certificate Authority) | An entity whose signature others agree to trust. It signs certificates with its private key. | `mTLS Demo Root CA` — self-signed |
-| **Root CA** | A CA whose certificate is **self-signed** (issuer = subject). Trust in it is configured, not proven. | `ca.crt` — placed in both truststores |
-| **Chain of trust** | Leaf cert → (intermediates) → root. Each link's signature is verified with the issuer's public key. | Leaf → root (no intermediate) |
-| **CSR** (Certificate Signing Request, PKCS#10) | The applicant's public key + requested subject, signed with its private key to prove possession. The CA turns it into a certificate. | `*.csr`, deleted after signing |
-| **Signature** | CA hashes the certificate body (SHA-256) and signs the hash with its private key. Anyone with the CA public key can verify it wasn't altered. | `sha256WithRSAEncryption` |
-| **mTLS** (mutual TLS) | Normal TLS authenticates only the server; mTLS makes the **client** present a certificate too, so both sides authenticate. | producer `client-auth: need` |
+| **Key pair** | Private + public key (6.2) | RSA-2048 per service, RSA-4096 for the CA |
+| **Certificate** | CA-signed statement: *"this public key belongs to this identity, for these purposes, until this date"* | `service-producer.crt`, `service-consumer.crt`, `service-unknown.crt` |
+| **CA** | Entity whose signature relying parties trust | `mTLS Demo Root CA` |
+| **Root CA** | Self-signed CA (issuer = subject); trust is *configured*, not proven | `ca.crt` in both truststores |
+| **Intermediate CA** | CA signed by the root, used for day-to-day issuing so the root key can stay offline | not used (demo) |
+| **Leaf / end-entity** | Cert for an actual service, `CA:FALSE` | the three service certs |
+| **PKI** | The whole system: CAs, certs, policies, revocation, stores | this repo's scripts + stores |
+
+<a id="chain-of-trust"></a>
+### <span style="color:hsl(20,80%,58%)">7.1 Certificate Authority and chain of trust</span>
+
+```mermaid
+flowchart TB
+    ROOT["🏛️ mTLS Demo Root CA<br/>self-signed · RSA-4096 · CA:TRUE<br/>SHA-256 fp FB:4D:48:…:9D:AD"]
+    ROOT -- "signs" --> PROD["service-producer<br/>CA:FALSE · serverAuth, clientAuth"]
+    ROOT -- "signs" --> CONS["service-consumer<br/>CA:FALSE · serverAuth, clientAuth"]
+    ROOT -- "signs" --> UNK["service-unknown<br/>CA:FALSE · (negative test)"]
+    TS1["producer truststore.p12"] -. "trusts" .-> ROOT
+    TS2["consumer truststore.p12"] -. "trusts" .-> ROOT
+```
+
+Trust is **transitive through signatures**: the producer never saw `service-consumer.crt`
+before, but it trusts the root, and the root's signature on the consumer cert verifies — so the
+consumer cert is trusted. `service-unknown` is equally trusted at the TLS layer; only the CN
+allow-list (section 10) stops it.
+
+<a id="csr-flow"></a>
+### <span style="color:hsl(80,80%,50%)">7.2 How a certificate is issued (CSR flow)</span>
+
+```mermaid
+sequenceDiagram
+    participant S as generate-certs.sh (applicant)
+    participant CA as Root CA (ca.key)
+    S->>S: openssl req -newkey rsa:2048 → service-producer.key (private)
+    S->>S: build CSR: public key + subject CN=service-producer
+    S->>S: sign CSR with own private key (proof of possession)
+    S->>CA: service-producer.csr (PKCS#10)
+    CA->>CA: verify CSR signature
+    CA->>CA: add issuer, serial, validity, extensions (SAN, EKU, keyUsage, basicConstraints)
+    CA->>CA: sign TBSCertificate with ca.key (SHA-256 + RSA)
+    CA->>S: service-producer.crt (X.509 v3)
+    S->>S: openssl pkcs12 -export → keystore.p12 (key + cert + CA)
+```
+
+The private key **never leaves** the applicant — the CA only sees the public key in the CSR.
 
 <a id="x509-certificate-anatomy"></a>
-### <span style="color:hsl(80,80%,50%)">5.2 X.509 certificate anatomy</span>
+### <span style="color:hsl(300,70%,60%)">7.3 X.509 certificate anatomy</span>
 
-`openssl x509 -in certs/out/service-producer.crt -noout -text` shows:
+```
+Certificate
+├── TBSCertificate ("to be signed")
+│   ├── Version                3 (v3)
+│   ├── Serial number          53:10:A2:58:…            unique per CA
+│   ├── Signature algorithm    sha256WithRSAEncryption
+│   ├── Issuer                 CN=mTLS Demo Root CA, O=com.org
+│   ├── Validity               notBefore … notAfter      825 days
+│   ├── Subject                CN=service-producer, O=com.org
+│   ├── SubjectPublicKeyInfo   RSA 2048-bit public key
+│   └── Extensions (v3)
+│       ├── basicConstraints   critical, CA:FALSE
+│       ├── keyUsage           critical, digitalSignature, keyEncipherment
+│       ├── extendedKeyUsage   serverAuth, clientAuth
+│       └── subjectAltName     DNS:service-producer, DNS:localhost, IP:127.0.0.1
+├── signatureAlgorithm         sha256WithRSAEncryption
+└── signatureValue             CA's RSA signature over TBSCertificate
+```
 
-| Field / extension | Meaning | Value in our leaf certs |
+| Extension | Critical? | Meaning |
 |---|---|---|
-| **Version** | X.509 v3 (supports extensions) | 3 |
-| **Serial number** | Unique per CA; used for revocation | random |
-| **Signature algorithm** | How the CA signed | `sha256WithRSAEncryption` |
-| **Issuer** | Who signed | `CN=mTLS Demo Root CA, O=com.org` |
-| **Validity** (`notBefore` / `notAfter`) | Lifetime; expired certs fail the handshake | 825 days (CA: 3650) |
-| **Subject** | Who the cert identifies | `CN=service-producer, O=com.org` |
-| **Subject Public Key Info** | The public key | RSA 2048 |
-| `basicConstraints` *(critical)* | Is this a CA? | `CA:FALSE` — a leaf can't sign other certs |
-| `keyUsage` *(critical)* | Low-level key operations allowed | `digitalSignature, keyEncipherment` |
-| `extendedKeyUsage` | Protocol roles allowed | `serverAuth, clientAuth` — same cert works as server *and* client |
-| `subjectAltName` (SAN) | Host names / IPs the cert is valid for; **hostname verification uses SAN, not CN** | `DNS:service-producer, DNS:localhost, IP:127.0.0.1` |
+| `basicConstraints` | yes | `CA:FALSE` → this cert may not sign other certs. The CA has `CA:TRUE` |
+| `keyUsage` | yes | Raw key operations: `digitalSignature` (sign handshake), `keyEncipherment` (legacy RSA key transport). CA: `keyCertSign, cRLSign` |
+| `extendedKeyUsage` | no | Protocol roles: `serverAuth` = may be a TLS server, `clientAuth` = may be a TLS client. Both set so one identity works in both directions |
+| `subjectAltName` | no | Names the cert is valid for — **used for hostname verification** |
 
-The CA cert has `basicConstraints=CA:TRUE` and `keyUsage=keyCertSign,cRLSign`.
+*Critical* = a validator that doesn't understand the extension must reject the cert.
 
-> **CN vs SAN** — TLS clients match the URL host against the **SAN** (that's why
-> `https://localhost:8443` works). The producer's authorization filter reads the **CN** to
-> decide *which service* is calling. Two different jobs, two different fields.
+<a id="path-validation"></a>
+### <span style="color:hsl(165,80%,45%)">7.4 Certificate path validation (PKIX)</span>
+
+What the JSSE `TrustManager` does with the chain the peer sends (RFC 5280):
+
+```mermaid
+flowchart TB
+    START(["peer sends: leaf + CA cert"]) --> BUILD{"Build path from leaf<br/>to a cert in MY truststore?"}
+    BUILD -- "no" --> F1["❌ PKIX path building failed<br/>alert: unknown_ca / certificate_unknown"]
+    BUILD -- "yes" --> SIG{"Every signature in path<br/>verifies with issuer's public key?"}
+    SIG -- "no" --> F2["❌ bad_certificate"]
+    SIG -- "yes" --> DATE{"now within notBefore…notAfter<br/>for every cert?"}
+    DATE -- "no" --> F3["❌ certificate_expired"]
+    DATE -- "yes" --> BC{"Issuers have CA:TRUE<br/>+ keyCertSign?"}
+    BC -- "no" --> F4["❌ bad_certificate"]
+    BC -- "yes" --> EKU{"Leaf EKU allows role?<br/>(serverAuth / clientAuth)"}
+    EKU -- "no" --> F5["❌ certificate_unknown"]
+    EKU -- "yes" --> HOST{"Client side only:<br/>SAN matches host?"}
+    HOST -- "no" --> F6["❌ No subject alternative<br/>names matching …"]
+    HOST -- "yes" --> OK(["✅ peer authenticated"])
+```
+
+<a id="hostname-verification"></a>
+### <span style="color:hsl(45,80%,50%)">7.5 Hostname verification — SAN vs CN</span>
+
+| Field | Checked by | Question it answers |
+|---|---|---|
+| **SAN** (`subjectAltName`) | The **client** (consumer's JDK HttpClient, `curl`) | "Is this cert valid for the host I dialled?" — `https://localhost:8443` must match `DNS:localhost` |
+| **CN** (Common Name) | Our **producer's** `ClientCertificateFilter` | "Which service is calling me?" — must be `service-consumer` |
+
+Modern TLS clients **ignore CN for hostname checks** (RFC 6125) — SAN is mandatory. Calling
+`https://127.0.0.1:8443` works because of `IP:127.0.0.1`; calling `https://myhost:8443` would
+fail until `DNS:myhost` is added to the SAN and the cert reissued.
+
+<a id="revocation"></a>
+### <span style="color:hsl(260,60%,65%)">7.6 Revocation — CRL and OCSP</span>
+
+A stolen key stays usable until its cert expires unless it can be **revoked**.
+
+| Mechanism | How | Used here? |
+|---|---|---|
+| **CRL** (Certificate Revocation List) | CA publishes a signed list of revoked serials | No |
+| **OCSP** | Client asks the CA's responder "is serial X still good?" | No |
+| **OCSP stapling** | Server attaches a fresh OCSP response in the handshake | No |
+| **Short-lived certs** | Certs valid for hours/days; no revocation needed | Recommended for production (cert-manager, SPIFFE) |
+
+In this demo, "revoking" a service = regenerate the CA (run both scripts) or remove the CN
+from `mtls.allowed-client-cns`.
+
+<a id="stores-and-formats"></a>
+## <span style="color:hsl(30,80%,55%)">8. 🗄️ Keystores, truststores and file formats</span>
 
 <a id="keystore-vs-truststore"></a>
-### <span style="color:hsl(300,70%,60%)">5.3 Keystore vs truststore</span>
+### <span style="color:hsl(20,80%,58%)">8.1 Keystore vs truststore</span>
 
-Both are the same file format (PKCS#12 here); what differs is **what you put in them** and
-**how they're used**.
+Same file format (PKCS#12); different **contents** and **role**.
 
 | | Keystore | Truststore |
 |---|---|---|
 | Answers | *"Who am I?"* | *"Whom do I trust?"* |
 | Contains | **PrivateKeyEntry**: own private key + own cert + chain (CA cert) | **trustedCertEntry**: CA certificate(s) only — no private keys |
-| Secret? | **Yes** — anyone with it can impersonate the service | No (public certs), but protect against tampering: adding a CA = trusting it |
-| Server side use | Cert sent in `Certificate` message; key signs `CertificateVerify` | Validates the client's cert chain |
-| Client side use | Cert sent when server sends `CertificateRequest`; key signs `CertificateVerify` | Validates the server's cert chain |
-| Spring Boot | `spring.ssl.bundle.jks.<name>.keystore.*` (+ `key.alias`) | `spring.ssl.bundle.jks.<name>.truststore.*` |
+| Secret? | **Yes** — possession = ability to impersonate the service | No, but tamper-sensitive: adding a CA = trusting everything it signs |
+| JSSE component | `KeyManager` — picks cert, signs `CertificateVerify` | `TrustManager` — runs path validation (7.4) |
+| Spring Boot | `spring.ssl.bundle.jks.<name>.keystore.*` + `key.alias` | `spring.ssl.bundle.jks.<name>.truststore.*` |
 
-| File | Type | Entries |
-|---|---|---|
-| `service-producer-keystore.p12` | keystore | alias `service-producer` → key + leaf cert + CA cert |
-| `service-consumer-keystore.p12` | keystore | alias `service-consumer` → key + leaf cert + CA cert |
-| `truststore.p12` (each module) | truststore | alias `mtls-demo-ca` → CA cert |
+```mermaid
+flowchart LR
+    subgraph C ["service-consumer"]
+        CKS["service-consumer-keystore.p12<br/>🔒 key + cert"]
+        CTS["truststore.p12<br/>CA"]
+    end
+    subgraph P ["service-producer"]
+        PKS["service-producer-keystore.p12<br/>🔒 key + cert"]
+        PTS["truststore.p12<br/>CA"]
+    end
+    CKS -- "① client cert + CertificateVerify<br/>validated by producer truststore" --> PTS
+    PKS -- "② server cert + CertificateVerify<br/>validated by consumer truststore" --> CTS
+```
 
-A **Spring Boot SSL bundle** groups one keystore + one truststore + protocol options under a
-name (`service-producer`, `service-consumer`) so the server (`server.ssl.bundle`) and HTTP
-clients can reference the pair by name.
+| File | Role | Entry | Alias |
+|---|---|---|---|
+| `service-producer/…/ssl/service-producer-keystore.p12` | keystore | PrivateKeyEntry (key + leaf + CA) | `service-producer` |
+| `service-producer/…/ssl/truststore.p12` | truststore | trustedCertEntry | `mtls-demo-ca` |
+| `service-consumer/…/ssl/service-consumer-keystore.p12` | keystore | PrivateKeyEntry | `service-consumer` |
+| `service-consumer/…/ssl/truststore.p12` | truststore | trustedCertEntry | `mtls-demo-ca` |
+
+<a id="pkcs12-internals"></a>
+### <span style="color:hsl(80,80%,50%)">8.2 PKCS#12 internals — how a `.p12` is protected</span>
+
+`openssl pkcs12 -info` on our files shows:
+
+```
+service-producer-keystore.p12
+├── MAC: HMAC-SHA256, 2048 iterations, 8-byte salt          ← integrity of the whole file
+├── Encrypted data (PBES2: PBKDF2-HMAC-SHA256 → AES-256-CBC, 2048 it.)
+│   └── Certificate bags: service-producer.crt, ca.crt
+└── Data
+    └── Shrouded Keybag (PBES2: PBKDF2-HMAC-SHA256 → AES-256-CBC, 2048 it.)
+        └── PKCS#8 private key                               ← encrypted at rest
+
+truststore.p12  (created by keytool)
+├── MAC: HMAC-SHA256, 10000 iterations, 20-byte salt
+└── Encrypted data (PBES2: PBKDF2-HMAC-SHA256 → AES-256-CBC, 10000 it.)
+    └── Certificate bag: ca.crt
+```
+
+```mermaid
+flowchart LR
+    PW["store password<br/>changeit"] --> KDF1["PBKDF2-HMAC-SHA256<br/>salt + 2048 it."] --> K1["AES-256 key"] --> ENC["AES-256-CBC + IV<br/>encrypt key bag / cert bag"]
+    PW --> KDF2["PBKDF2 (MAC key)"] --> MAC["HMAC-SHA256 over contents<br/>→ wrong password / tamper detected"]
+```
+
+The same **PBES2 = PBKDF2 + AES-CBC** pattern protects Jasypt `ENC(...)` values (section 12).
+The store password (`changeit`) is therefore the only thing protecting the private key at rest —
+replace it for anything real.
 
 <a id="file-formats"></a>
-### <span style="color:hsl(165,80%,45%)">5.4 File formats — PEM, DER, PKCS#1/#8/#10/#12, JKS</span>
+### <span style="color:hsl(300,70%,60%)">8.3 File formats — PEM, DER, PKCS#1/#8/#10/#12, JKS</span>
 
 | Name | What it is | Where you meet it here |
 |---|---|---|
-| **ASN.1** | Abstract syntax all of these structures are defined in | — |
+| **ASN.1** | Abstract schema language all these structures are defined in | — |
 | **DER** | Binary encoding of ASN.1 | inside everything below |
-| **PEM** | Base64(DER) between `-----BEGIN …-----` / `-----END …-----` lines — text, copy-paste friendly | `certs/out/*.crt`, `*.key` (used by `curl`) |
-| **PKCS#1** | RSA-specific key format (`BEGIN RSA PRIVATE KEY`) | — |
-| **PKCS#8** | Algorithm-agnostic private key format (`BEGIN PRIVATE KEY`) | `*.key` from `openssl req -newkey` |
+| **PEM** | Base64(DER) between `-----BEGIN …-----` / `-----END …-----` — text, copy-paste friendly | `certs/out/*.crt`, `*.key` (used by `curl`) |
+| **PKCS#1** | RSA-only key format (`BEGIN RSA PRIVATE KEY`) | — |
+| **PKCS#8** | Algorithm-agnostic private key (`BEGIN PRIVATE KEY`; encrypted variant `BEGIN ENCRYPTED PRIVATE KEY`) | `*.key`; inside `.p12` as shrouded keybag |
 | **PKCS#10** | Certificate Signing Request (`BEGIN CERTIFICATE REQUEST`) | `*.csr` (temporary) |
-| **PKCS#5 / PBKDF2** | Password-based key derivation — protects the contents of a `.p12`; Jasypt uses the same idea for `ENC(...)` | `.p12` password `changeit` |
-| **PKCS#12** (`.p12` / `.pfx`) | Password-protected container bundling private keys + cert chains + trusted certs. Industry standard; default keystore type since Java 9 | all `*.p12` |
-| **JKS** | Legacy Java-only keystore format | not used (Spring's `jks` bundle prefix supports both JKS and PKCS12 via `type`) |
+| **PKCS#5 v2** | PBKDF2 + PBES2 password-based encryption | `.p12` protection, Jasypt |
+| **PKCS#12** (`.p12` / `.pfx`) | Password-protected container of keys + certs; Java default keystore type since 9 | all `*.p12` |
+| **JKS** | Legacy Java-proprietary keystore, weaker protection | not used (Spring's `jks` bundle prefix reads PKCS12 via `type: PKCS12`) |
+
+```mermaid
+flowchart LR
+    KEY["service.key<br/>PEM · PKCS#8"] --> P12["service-keystore.p12<br/>PKCS#12"]
+    CRT["service.crt<br/>PEM · X.509"] --> P12
+    CA["ca.crt<br/>PEM"] --> P12
+    CA --> TS["truststore.p12"]
+    P12 -- "openssl pkcs12 -nokeys" --> CRT
+    P12 -- "openssl pkcs12 -nocerts -nodes" --> KEY
+    CRT <-- "openssl x509 -outform DER/PEM" --> DER["service.der<br/>DER"]
+```
+
+<a id="tls-protocol"></a>
+## <span style="color:hsl(200,80%,55%)">9. 🔐 TLS protocol</span>
+
+<a id="tls-layers"></a>
+### <span style="color:hsl(20,80%,58%)">9.1 TLS layers — handshake and record protocol</span>
+
+```mermaid
+flowchart TB
+    HTTP["HTTP/1.1 — GET /api/v1/greetings/…"]
+    subgraph TLS ["TLS 1.3"]
+        HS["Handshake protocol<br/>negotiate version, suite, keys · authenticate peers"]
+        AL["Alert protocol<br/>errors / close_notify"]
+        REC["Record protocol<br/>fragment · AEAD encrypt (AES-256-GCM) · sequence numbers"]
+        HS --> REC
+        AL --> REC
+    end
+    TCP["TCP :8443"]
+    HTTP --> REC --> TCP
+```
+
+- **Handshake** runs once per connection: agrees on parameters, authenticates both sides, derives keys.
+- **Record layer** then carries every byte (HTTP included) as encrypted, authenticated records.
+- **HTTPS** is simply HTTP carried over TLS.
+
+<a id="tls12-vs-tls13"></a>
+### <span style="color:hsl(80,80%,50%)">9.2 TLS 1.2 vs TLS 1.3</span>
+
+Both are enabled (`enabled-protocols: TLSv1.3,TLSv1.2`); TLS 1.3 is preferred and is what the
+services negotiate. TLS 1.1 and below are refused.
+
+| | TLS 1.2 | TLS 1.3 |
+|---|---|---|
+| Round trips before data | 2-RTT | **1-RTT** |
+| Key exchange | RSA key transport *or* (EC)DHE | **(EC)DHE only** — forward secrecy mandatory |
+| Handshake encryption | Certificates sent **in clear** | Everything after `ServerHello` **encrypted** (certs hidden from observers) |
+| Cipher modes | CBC, GCM, … (many weak options) | **AEAD only** (AES-GCM, ChaCha20-Poly1305) |
+| RSA signature | PKCS#1 v1.5 allowed | **RSA-PSS** required |
+| Key derivation | PRF | HKDF with a clear key schedule |
+| Suite naming | `ECDHE-RSA-AES256-GCM-SHA384` (kx + auth + cipher + hash) | `TLS_AES_256_GCM_SHA384` (cipher + hash only; kx/auth negotiated separately) |
+
+<a id="cipher-suites"></a>
+### <span style="color:hsl(300,70%,60%)">9.3 Cipher suite anatomy</span>
+
+```
+TLS 1.3:   TLS _ AES_256_GCM _ SHA384
+                  │             └── hash for HKDF key schedule + transcript
+                  └── AEAD record cipher (AES, 256-bit key, GCM mode)
+           key exchange   → negotiated via "supported_groups"      (X25519)
+           authentication → negotiated via "signature_algorithms"  (rsa_pss_rsae_sha256)
+
+TLS 1.2:   ECDHE - RSA - AES256-GCM - SHA384
+             │      │        │          └── PRF hash
+             │      │        └── record cipher
+             │      └── authentication (server's RSA cert signs)
+             └── key exchange (ephemeral ECDH)
+```
+
+<a id="negotiated-parameters"></a>
+### <span style="color:hsl(165,80%,45%)">9.4 What this project actually negotiates</span>
+
+Verified with `openssl s_client` (OpenSSL 3.5) and `-Djavax.net.debug=ssl:handshake` on the consumer (JDK 26):
+
+| Parameter | Consumer (JDK) → Producer | `openssl s_client` → Producer | `-tls1_2` forced |
+|---|---|---|---|
+| Protocol | **TLSv1.3** | TLSv1.3 | TLSv1.2 |
+| Cipher suite | `TLS_AES_256_GCM_SHA384` | `TLS_AES_256_GCM_SHA384` | `ECDHE-RSA-AES256-GCM-SHA384` |
+| Key exchange group | `x25519` | X25519 (253 bits) | ECDHE |
+| Server signature | — | `rsa_pss_rsae_sha256` | — |
+| Server key | RSA 2048 | RSA 2048 | RSA 2048 |
+| Client CAs requested by producer | — | `CN=mTLS Demo Root CA, O=com.org` | same |
+| TLS 1.1 attempt | — | refused — alert 70 `protocol_version` | — |
 
 <a id="the-mtls-handshake"></a>
-### <span style="color:hsl(45,80%,50%)">5.5 The mTLS handshake step by step (TLS 1.3)</span>
+### <span style="color:hsl(45,80%,50%)">9.5 The mTLS handshake step by step (TLS 1.3)</span>
 
 ```mermaid
 sequenceDiagram
-    participant C as service-consumer (client)
-    participant P as service-producer (server)
+    autonumber
+    participant C as service-consumer<br/>(JDK HttpClient)
+    participant P as service-producer<br/>(Tomcat, client-auth=need)
 
-    C->>P: ClientHello — TLS versions, cipher suites, key share (ECDHE)
-    P->>C: ServerHello — chosen suite, key share
-    Note over C,P: both derive handshake keys from ECDHE — everything below is encrypted
-    P->>C: CertificateRequest — "send me a cert" (because client-auth=need)
-    P->>C: Certificate — service-producer leaf + CA
-    P->>C: CertificateVerify — signature over transcript with producer private key
-    P->>C: Finished
-    Note over C: ① chain → CA in consumer truststore?<br/>② SAN matches "localhost"? ③ dates valid?<br/>④ signature proves producer holds the key
-    C->>P: Certificate — service-consumer leaf + CA
-    C->>P: CertificateVerify — signature with consumer private key
-    C->>P: Finished
-    Note over P: ① chain → CA in producer truststore?<br/>② dates valid? ③ proof of key possession
-    Note over C,P: application keys derived — HTTP flows encrypted
-    C->>P: GET /api/v1/greetings/…
-    Note over P: ClientCertificateFilter: CN=service-consumer ∈ allow-list?
+    C->>P: ClientHello: versions [1.3,1.2], suites, supported_groups, key_share(X25519 pub A), signature_algorithms, random
+    P->>C: ServerHello: TLS 1.3, TLS_AES_256_GCM_SHA384, key_share(X25519 pub B), random
+    Note over C,P: ECDHE shared secret → HKDF → handshake traffic keys<br/>🔒 everything below is encrypted
+    P->>C: EncryptedExtensions
+    P->>C: CertificateRequest: acceptable CA = "mTLS Demo Root CA", sig algs
+    P->>C: Certificate: [service-producer leaf, CA]
+    P->>C: CertificateVerify: RSA-PSS-SHA256 signature over transcript hash
+    P->>C: Finished: HMAC over transcript
+    Note over C: TrustManager path validation (7.4)<br/>SAN "localhost" ✓ · verify signature with producer public key ✓<br/>verify Finished HMAC ✓
+    C->>P: Certificate: [service-consumer leaf, CA]
+    C->>P: CertificateVerify: RSA-PSS-SHA256 signature with consumer private key
+    C->>P: Finished: HMAC over transcript
+    Note over P: TrustManager path validation ✓<br/>signature proves consumer owns the key ✓<br/>verify Finished ✓
+    Note over C,P: HKDF → application traffic keys
+    C->>P: 🔒 GET /api/v1/greetings/himansu?lang=fr
+    Note over P: ClientCertificateFilter: CN=service-consumer ∈ allow-list ✓
+    P->>C: 🔒 200 {"message":"Bonjour, himansu !", "callerCn":"service-consumer", …}
 ```
 
-Key points:
+| Step | Message | Why it matters |
+|---|---|---|
+| 1–2 | Hello messages + key shares | Agree on TLS 1.3 + suite; exchange ephemeral X25519 public keys |
+| 3 | EncryptedExtensions | First encrypted message — rest of handshake hidden from observers |
+| 4 | **CertificateRequest** | Sent only because `client-auth: need`; lists acceptable CA names from the producer truststore |
+| 5–6 | Server Certificate + **CertificateVerify** | Cert is public; the signature proves the producer holds the private key *for this specific handshake* |
+| 7 | Server Finished | HMAC over all messages — detects any tampering with the handshake |
+| 8–10 | Client Certificate + CertificateVerify + Finished | The "mutual" in mTLS — same proof, other direction |
+| 11–12 | Application data | HTTP inside AES-256-GCM records |
 
-- **Certificates prove identity only together with `CertificateVerify`.** A certificate is
-  public; the signature over the handshake transcript proves the sender owns the private key.
-- **ECDHE** gives *forward secrecy*: session keys are ephemeral, so a stolen private key can't
-  decrypt previously recorded traffic. The RSA keys are used only for signatures.
-- Any failure in ①–④ aborts the handshake with a TLS alert (`bad_certificate`,
-  `certificate_unknown`, `unknown_ca`) — the HTTP request is never sent.
+<a id="key-schedule"></a>
+### <span style="color:hsl(260,60%,65%)">9.6 TLS 1.3 key schedule</span>
 
-<a id="what-each-script-command-does"></a>
-### <span style="color:hsl(0,70%,60%)">5.6 What each script command does</span>
+```mermaid
+flowchart TB
+    Z["0 (no PSK)"] --> E["HKDF-Extract → Early Secret"]
+    E --> D1["Derive-Secret"]
+    ECDHE["ECDHE shared secret<br/>(X25519: a·B = b·A)"] --> H["HKDF-Extract → Handshake Secret"]
+    D1 --> H
+    H --> CHTS["client_handshake_traffic_secret"]
+    H --> SHTS["server_handshake_traffic_secret"]
+    H --> D2["Derive-Secret"] --> M["HKDF-Extract → Master Secret"]
+    M --> CATS["client_application_traffic_secret"]
+    M --> SATS["server_application_traffic_secret"]
+    CHTS --> KH["key + iv → encrypt Certificate / CertificateVerify / Finished"]
+    SHTS --> KH
+    CATS --> KA["key + iv → AES-256-GCM for HTTP records"]
+    SATS --> KA
+    TH["transcript hash (SHA-384)<br/>of all handshake messages"] -.-> CHTS
+    TH -.-> CATS
+```
 
-| Command | Purpose |
+Every secret is mixed with the **transcript hash**, so keys are bound to the exact handshake
+that produced them — altering any message changes all keys.
+
+<a id="tls-alerts"></a>
+### <span style="color:hsl(0,70%,60%)">9.7 TLS alerts and what they mean</span>
+
+| Situation | Alert | What you see |
+|---|---|---|
+| Client sends no cert to producer | `certificate_required` (116) / `bad_certificate` | `curl: (56) … alert` · Java `SSLHandshakeException` → consumer `502` |
+| Client cert signed by unknown CA (self-signed rogue) | `unknown_ca` / `certificate_unknown` | `curl` exit 56 |
+| Consumer truststore lacks producer's CA | client aborts with `certificate_unknown` | `PKIX path building failed … unable to find valid certification path` → `502` |
+| Host not in SAN | client aborts | `No subject alternative names matching IP address …` |
+| Expired cert | `certificate_expired` | `CertificateExpiredException` |
+| TLS 1.1 offered | `protocol_version` (70) | `tlsv1 alert protocol version` |
+| Tampered record | `bad_record_mac` (20) | connection reset |
+| CA-trusted cert, CN not allow-listed | *(no alert — TLS succeeded)* | HTTP `403` |
+
+<a id="authn-vs-authz"></a>
+## <span style="color:hsl(120,60%,45%)">10. 🧷 Authentication vs authorization</span>
+
+mTLS answers **"who are you?"** (authentication). It does **not** answer **"may you do this?"**
+(authorization). Any cert signed by the CA passes TLS, so the producer adds a second gate.
+
+```mermaid
+sequenceDiagram
+    participant X as Caller
+    participant T as Tomcat TLS (L4)
+    participant F as ClientCertificateFilter (L7)
+    participant G as GreetingController
+
+    alt no cert / untrusted CA / expired
+        X->>T: handshake
+        T-->>X: ❌ TLS alert — connection closed, no HTTP
+    else trusted cert, CN = service-unknown
+        X->>T: handshake ✓
+        T->>F: request + X509Certificate[]
+        F-->>X: ❌ 403 Forbidden
+    else trusted cert, CN = service-consumer
+        X->>T: handshake ✓
+        T->>F: request + X509Certificate[]
+        F->>G: ✓ attribute mtls.client.cn = service-consumer
+        G-->>X: ✅ 200 greeting from DB
+    end
+```
+
+| Layer | Mechanism | Config | Failure |
+|---|---|---|---|
+| Authentication (TLS) | Path validation against truststore | `server.ssl.client-auth: need`, truststore | Handshake alert |
+| Authorization (HTTP) | CN extracted via `LdapName` from `jakarta.servlet.request.X509Certificate` | `mtls.allowed-client-cns` | `403` |
+
+<a id="spring-ssl-wiring"></a>
+## <span style="color:hsl(30,80%,55%)">11. 🌱 How Spring Boot wires TLS (SSL bundles → JSSE)</span>
+
+Java's TLS implementation is **JSSE** (`javax.net.ssl`). Spring Boot's **SSL bundles** load the
+stores once and hand a ready `SSLContext` to both the embedded server and HTTP clients.
+
+```mermaid
+flowchart TB
+    YML["application.yml<br/>spring.ssl.bundle.jks.&lt;name&gt;"] --> SB["SslBundles registry"]
+    SB --> KS["KeyStore (keystore.p12)<br/>+ key.alias"]
+    SB --> TS["KeyStore (truststore.p12)"]
+    KS --> KMF["KeyManagerFactory → X509KeyManager<br/>chooses our cert · signs CertificateVerify"]
+    TS --> TMF["TrustManagerFactory (PKIX) → X509TrustManager<br/>validates peer chain"]
+    KMF --> CTX["SSLContext (TLS)"]
+    TMF --> CTX
+    SB --> OPT["options.enabled-protocols<br/>TLSv1.3, TLSv1.2"]
+    CTX --> TOM["Tomcat connector :8443 / :9443<br/>server.ssl.bundle + client-auth"]
+    CTX --> HC["JDK HttpClient via<br/>HttpClientSettings.ofSslBundle()<br/>(consumer → producer)"]
+    OPT --> TOM
+    OPT --> HC
+```
+
+```mermaid
+sequenceDiagram
+    participant Boot as Spring Boot startup
+    participant Reg as SslBundles
+    participant Tom as Tomcat
+    participant RC as ProducerClientConfig
+    Boot->>Reg: bind spring.ssl.bundle.jks.* → load PKCS12 stores (password → PBKDF2 → decrypt)
+    Boot->>Tom: server.ssl.bundle=service-producer → SSLContext + client-auth=need
+    Tom->>Tom: listen https :8443
+    Boot->>RC: create producerRestClient
+    RC->>Reg: getBundle("service-consumer")
+    RC->>RC: HttpClientSettings.ofSslBundle(bundle).withTimeouts(5s)
+    RC->>RC: ClientHttpRequestFactoryBuilder.detect() → JDK HttpClient with SSLContext
+```
+
+| Config | Effect |
 |---|---|
-| `openssl req -x509 -newkey rsa:4096 … -keyout ca.key -out ca.crt -addext basicConstraints=critical,CA:TRUE …` | Create the CA key pair and a **self-signed** root certificate in one step (only if `ca.key` doesn't exist) |
-| `openssl req -newkey rsa:2048 -nodes -keyout <svc>.key -out <svc>.csr -subj "/CN=<svc>/O=com.org"` | Create a service key pair and a CSR (`-nodes` = don't encrypt the PEM key) |
-| `openssl x509 -req -in <svc>.csr -CA ca.crt -CAkey ca.key -extfile <svc>.ext -out <svc>.crt` | CA signs the CSR, adding the extensions from `<svc>.ext` (SAN, EKU, keyUsage, basicConstraints) |
-| `openssl pkcs12 -export -name <svc> -inkey <svc>.key -in <svc>.crt -certfile ca.crt -out <svc>-keystore.p12` | Bundle key + leaf + CA chain into a password-protected **keystore**; `-name` becomes the alias Spring uses (`key.alias`) |
-| `keytool -importcert -alias mtls-demo-ca -file ca.crt -keystore truststore.p12 -storetype PKCS12` | Create a **truststore** holding only the CA cert as a `trustedCertEntry` |
+| `spring.ssl.bundle.jks.<n>.keystore.location/password/type` | Load identity store |
+| `spring.ssl.bundle.jks.<n>.key.alias` | Which PrivateKeyEntry to use |
+| `spring.ssl.bundle.jks.<n>.truststore.*` | Load trust anchors |
+| `spring.ssl.bundle.jks.<n>.options.enabled-protocols` | Restrict TLS versions |
+| `server.ssl.bundle` | Server uses this bundle |
+| `server.ssl.client-auth` | `none` / `want` (ask, don't require) / **`need`** (require) |
+
+<a id="secrets-at-rest"></a>
+## <span style="color:hsl(240,80%,65%)">12. 🔑 Secrets at rest — Jasypt `ENC(...)`</span>
+
+The producer's DB password is stored as `ENC(<base64>)` in `application.yml` and decrypted in
+memory at startup with a master key from `JASYPT_ENCRYPTOR_PASSWORD`. Algorithm
+`PBEWITHHMACSHA512ANDAES_256` = **PBKDF2-HMAC-SHA512 (1000 it.) → AES-256-CBC**.
+
+```mermaid
+flowchart LR
+    subgraph encrypt ["Encrypt (once, by developer)"]
+        P1["mtls_s3cret"] --> A1["AES-256-CBC"]
+        MK1["master key"] --> K1["PBKDF2-HMAC-SHA512<br/>1000 it."]
+        S1["random salt 16 B"] --> K1 --> A1
+        IV1["random IV 16 B"] --> A1
+        A1 --> OUT["Base64(salt ‖ IV ‖ ciphertext)<br/>→ ENC(NO0t…ZYC)"]
+    end
+    subgraph decrypt ["Decrypt (every startup)"]
+        IN["ENC(NO0t…ZYC)"] --> SPLIT["Base64-decode → 48 B<br/>salt 16 · IV 16 · ct 16"]
+        MK2["JASYPT_ENCRYPTOR_PASSWORD"] --> K2["PBKDF2 (same salt)"]
+        SPLIT --> K2 --> A2["AES-256-CBC decrypt"]
+        SPLIT --> A2 --> PT["mtls_s3cret → HikariCP"]
+    end
+```
+
+```mermaid
+sequenceDiagram
+    participant Boot as Spring Boot
+    participant J as Jasypt BeanFactoryPostProcessor
+    participant Env as Environment
+    participant DS as DataSourceProperties / HikariCP
+    Boot->>J: before any bean is created
+    J->>Env: wrap every PropertySource (EncryptablePropertySourceWrapper)
+    DS->>Env: getProperty("spring.datasource.password")
+    Env->>Env: detector: starts with "ENC(" ends with ")"?
+    Env->>Env: StringEncryptor.decrypt(payload)
+    Env-->>DS: "mtls_s3cret" (memory only, cached)
+    DS->>DS: open JDBC pool → Flyway → app ready
+```
+
+Full details — ciphertext byte layout, salt vs IV, encrypt/decrypt CLI, rotation and
+troubleshooting — are in the [producer README](service-producer/README.md#encrypted-db-password).
+
+| Protects | Doesn't protect |
+|---|---|
+| Password in git, CI logs, container images, config dumps | Attacker who also has the master key |
+| Cheap offline guessing (salt + iterations) | Heap dump of the running JVM |
 
 <a id="inspecting-the-material"></a>
-### <span style="color:hsl(260,60%,65%)">5.7 Inspecting the material</span>
+## <span style="color:hsl(193,80%,58%)">13. 🔍 Inspecting and debugging</span>
 
 ```bash
 # certificate details (subject, issuer, SAN, EKU, validity)
@@ -214,13 +896,78 @@ openssl verify -CAfile certs/out/ca.crt certs/out/service-consumer.crt
 keytool -list -v -keystore service-producer/src/main/resources/ssl/service-producer-keystore.p12 -storepass changeit
 keytool -list -v -keystore service-producer/src/main/resources/ssl/truststore.p12 -storepass changeit
 
-# watch a real mTLS handshake against the producer
+# how a .p12 is protected (PBES2 / PBKDF2 / AES-256-CBC / MAC)
+openssl pkcs12 -info -noout -in service-producer/src/main/resources/ssl/service-producer-keystore.p12 -passin pass:changeit
+
+# watch a real mTLS handshake: protocol, cipher, key share, requested CA names
 openssl s_client -connect localhost:8443 -CAfile certs/out/ca.crt \
   -cert certs/out/service-consumer.crt -key certs/out/service-consumer.key </dev/null
+
+# force TLS 1.2 / prove TLS 1.1 is refused
+openssl s_client -tls1_2 -connect localhost:8443 -CAfile certs/out/ca.crt \
+  -cert certs/out/service-consumer.crt -key certs/out/service-consumer.key </dev/null
+openssl s_client -tls1_1 -cipher 'DEFAULT@SECLEVEL=0' -connect localhost:8443 </dev/null
+
+# JSSE handshake trace from the Java side
+java -Djavax.net.debug=ssl:handshake -jar service-consumer/target/service-consumer-0.0.1-SNAPSHOT.jar
 ```
 
+<a id="production-hardening"></a>
+## <span style="color:hsl(0,75%,60%)">14. 🏭 Production hardening checklist</span>
+
+| Area | Demo | Production |
+|---|---|---|
+| CA | Self-signed root, key on disk | Offline root + online intermediate; HSM/KMS-backed (Vault PKI, AWS Private CA, cert-manager) |
+| Cert lifetime | 825 days | Hours–days, automated rotation (SPIFFE/SPIRE, cert-manager) |
+| Revocation | None | Short-lived certs or OCSP stapling |
+| Stores | Committed `.p12`, password `changeit` | Mounted from secret manager (`SSL_KEYSTORE_LOCATION=file:/…`), strong passwords |
+| Hot reload | Off (classpath stores) | File-based stores + `spring.ssl.bundle.jks.*.reload-on-update: true` |
+| Protocols | TLS 1.3 + 1.2 | TLS 1.3 only if all peers support it |
+| Authorization | CN allow-list filter | Spring Security `x509()` → roles, or SPIFFE IDs in SAN URI |
+| Jasypt master key | Documented demo value | Injected from secret store; rotate; or replace with Vault/KMS-managed secrets |
+| Inbound to consumer | One-way TLS | mTLS or OAuth2 at the edge |
+
+<a id="glossary"></a>
+## <span style="color:hsl(260,60%,65%)">15. 📖 Glossary</span>
+
+| Term | Meaning |
+|---|---|
+| **AEAD** | Authenticated Encryption with Associated Data — encrypt + integrity-protect in one operation (AES-GCM) |
+| **AES** | Advanced Encryption Standard — 128-bit block symmetric cipher |
+| **CA** | Certificate Authority — signs certificates |
+| **CBC** | Cipher Block Chaining — block cipher mode needing an IV and padding |
+| **CN** | Common Name — attribute in a certificate subject |
+| **CSR** | Certificate Signing Request (PKCS#10) |
+| **CSPRNG** | Cryptographically Secure Pseudo-Random Number Generator |
+| **ECDHE** | Elliptic-Curve Diffie-Hellman Ephemeral — key agreement with fresh keys per session |
+| **EKU** | Extended Key Usage — `serverAuth`, `clientAuth`, … |
+| **Forward secrecy** | Compromise of long-term keys doesn't expose past sessions |
+| **GCM** | Galois/Counter Mode — AEAD mode for AES |
+| **HKDF** | HMAC-based Key Derivation Function (TLS 1.3 key schedule) |
+| **HMAC** | Hash-based Message Authentication Code |
+| **IV** | Initialisation Vector — random, public per-encryption input for CBC |
+| **JSSE** | Java Secure Socket Extension — Java's TLS implementation |
+| **KDF** | Key Derivation Function |
+| **mTLS** | Mutual TLS — both client and server present certificates |
+| **Nonce** | Number used once — must never repeat under the same key |
+| **OCSP / CRL** | Online status check / list of revoked certificates |
+| **PBE / PBES2 / PBKDF2** | Password-Based Encryption scheme / its v2 scheme / its key-derivation function (PKCS#5) |
+| **PEM / DER** | Base64 text / binary encodings of ASN.1 structures |
+| **PKCS#8 / #10 / #12** | Private-key format / CSR format / keystore container |
+| **PKI** | Public Key Infrastructure |
+| **PKIX** | X.509 path-validation profile (RFC 5280) |
+| **PSS** | Probabilistic Signature Scheme — randomized RSA signature padding |
+| **RSA** | Rivest-Shamir-Adleman public-key algorithm |
+| **Salt** | Random, public input to a KDF so equal passwords give different keys |
+| **SAN** | Subject Alternative Name — hostnames/IPs a cert is valid for |
+| **SHA-2** | SHA-256/384/512 hash family |
+| **SSL bundle** | Spring Boot abstraction grouping keystore + truststore + options |
+| **Truststore / keystore** | Store of trusted CA certs / store of own private key + cert |
+| **X25519** | ECDH on Curve25519 |
+| **X.509** | Certificate format standard |
+
 <a id="quick-start"></a>
-## <span style="color:hsl(120,60%,45%)">6. 🚀 Quick start</span>
+## <span style="color:hsl(120,60%,45%)">16. 🚀 Quick start</span>
 
 ```bash
 docker compose up -d --wait
@@ -236,7 +983,7 @@ curl --cacert certs/out/ca.crt "https://localhost:9443/api/v1/hello/himansu?lang
 ```
 
 <a id="maven-commands"></a>
-## <span style="color:hsl(30,80%,55%)">7. 🔨 Maven commands</span>
+## <span style="color:hsl(30,80%,55%)">17. 🔨 Maven commands</span>
 
 | Command | What it does |
 |---|---|

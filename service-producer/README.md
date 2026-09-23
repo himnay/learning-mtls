@@ -5,7 +5,7 @@
 1. 🧰 [Stack](#stack)
 2. 🎯 [What this service does](#what-this-service-does)
 3. ✨ [Features used](#features-used)
-4. 🔐 [How mutual TLS is enforced](#how-mutual-tls-is-enforced) — concepts: [PKI & TLS](../README.md#pki-and-tls-concepts)
+4. 🔐 [How mutual TLS is enforced](#how-mutual-tls-is-enforced) — concepts: [Security, TLS & encryption](../README.md#security-goals)
 5. 🗄️ [Database — PostgreSQL + Flyway](#database)
 6. 🔑 [Encrypted DB password — Jasypt `ENC(...)`](#encrypted-db-password)
     - 6.1 [Configuration](#jasypt-configuration)
@@ -109,7 +109,7 @@ service-producer/src/main/resources/ssl/generate-certs.sh
 It creates the CA on first run, issues `service-producer` (main) plus the two test-client
 identities (test), and rebuilds `truststore.p12`. The script is excluded from the jar.
 What a keystore, truststore, certificate and PKCS#12 are — and how the handshake uses them —
-is explained in [PKI & TLS concepts](../README.md#pki-and-tls-concepts).
+is explained in [root README — PKI, keystores, TLS handshake](../README.md#pki).
 
 ### <span style="color:hsl(80,80%,50%)">4.2 Two layers of checks</span>
 
