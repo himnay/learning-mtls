@@ -25,19 +25,19 @@
 <a id="stack"></a>
 ## <span style="color:hsl(278,80%,58%)">1. 🧰 Stack</span>
 
-| Component          | Version / Detail                                        |
-|--------------------|---------------------------------------------------------|
-| Java               | 25 (enforced by super-pom: 21+)                         |
-| Spring Boot        | 4.1.0 (via `learning-mtls` → `super-pom`)               |
-| Web                | Spring MVC on embedded Tomcat, HTTPS only (port `8443`) |
-| TLS                | Spring Boot SSL bundles, PKCS12, TLS 1.3 / 1.2          |
-| Persistence        | Spring Data JDBC + PostgreSQL 19 (beta3)                |
-| Migrations         | Flyway (`flyway-database-postgresql`)                   |
-| Secret encryption  | Jasypt Spring Boot 4.0.4 (`PBEWITHHMACSHA512ANDAES_256`)|
-| Boilerplate        | Lombok + Java records                                   |
-| Dev loop           | Spring Boot DevTools (auto-restart)                     |
-| Tests              | JUnit 5, Testcontainers (PostgreSQL), RestClient        |
-| Build              | Maven 3.9+                                              |
+| Component         | Version / Detail                                                        |
+|-------------------|-------------------------------------------------------------------------|
+| Java              | 25 (`maven.compiler.release` from super-pom; needs JDK 25+)             |
+| Spring Boot       | 4.1.0 (via `learning-mtls` → `super-pom`)                               |
+| Web               | Spring MVC on embedded Tomcat, HTTPS only (port `8443`)                 |
+| TLS               | Spring Boot SSL bundles, PKCS12, TLS 1.3 / 1.2                          |
+| Persistence       | Spring Data JDBC + PostgreSQL 19 (beta3), HikariCP                      |
+| Migrations        | Flyway 12 (`spring-boot-starter-flyway` + `flyway-database-postgresql`) |
+| Secret encryption | Jasypt Spring Boot 4.0.4 (`PBEWITHHMACSHA512ANDAES_256`)                |
+| Boilerplate       | Lombok + Java records                                                   |
+| Dev loop          | Spring Boot DevTools (auto-restart)                                     |
+| Tests             | JUnit Jupiter 6, Testcontainers 2 (PostgreSQL), RestClient              |
+| Build             | Maven 3.9+                                                              |
 
 <a id="what-this-service-does"></a>
 ## <span style="color:hsl(56,80%,50%)">2. 🎯 What this service does</span>
@@ -58,7 +58,7 @@ sequenceDiagram
     participant DB as PostgreSQL
 
     C->>T: ClientHello
-    T-->>C: ServerHello + service-producer cert + CertificateRequest
+    T-->>C: ServerHello + CertificateRequest + service-producer cert + CertificateVerify
     C->>T: service-consumer cert + CertificateVerify
     Note over T: chain → truststore?<br/>no → handshake aborted
     T->>F: HTTP request + X509Certificate[]
@@ -76,9 +76,9 @@ sequenceDiagram
 |---|---|---|
 | **Spring Boot SSL bundle** (`spring.ssl.bundle.jks.service-producer`) | `application.yml` | One named bundle holds keystore + truststore + protocol options; the server references it via `server.ssl.bundle`. |
 | **`server.ssl.client-auth: need`** | `application.yml` | Makes Tomcat *require* a client cert; untrusted or missing certs fail in the handshake — no HTTP request is ever produced. |
-| **CN allow-list filter** | `security/ClientCertificateFilter` | Transport trust ≠ authorization. Any cert from the CA passes TLS; only listed CNs reach the controller (others get `403`). |
-| **`@ConfigurationProperties` record** | `security/MtlsProperties` | Immutable, type-safe binding of `mtls.allowed-client-cns`. |
-| **Spring Data JDBC with a record entity** | `greeting/GreetingTemplate`, `GreetingTemplateRepository` | Zero-boilerplate read model; no JPA/Hibernate needed for a lookup table. |
+| **CN allow-list filter** | `filter/ClientCertificateFilter` | Transport trust ≠ authorization. Any cert from the CA passes TLS; only listed CNs reach the controller (others get `403`). |
+| **`@ConfigurationProperties` record** | `config/MtlsProperties` | Immutable, type-safe binding of `mtls.allowed-client-cns`. |
+| **Spring Data JDBC with a record entity** | `entites/GreetingTemplate`, `repository/GreetingTemplateRepository` | Zero-boilerplate read model; no JPA/Hibernate needed for a lookup table. |
 | **Flyway migrations** | `src/main/resources/db/migration` | Schema (`V1`) and seed data (`V2`) are versioned and applied on startup. |
 | **Jasypt `ENC(...)`** | `spring.datasource.password` | DB password is stored encrypted in YAML; decrypted in memory at startup with a master key supplied via env. |
 | **RFC 9457 Problem Details** | `spring.mvc.problemdetails.enabled` | Unknown language → `404` with `application/problem+json`. |
@@ -105,12 +105,12 @@ issued for. In `service-producer-keystore.p12` the subject is `CN=service-produc
 (this module's own server identity); the other entries below carry their own subjects,
 e.g. `CN=service-consumer` and `CN=service-unknown` for the test-client certs.
 
-| File (classpath)                         | Contains                                   | Used for |
-|------------------------------------------|--------------------------------------------|----------|
-| `ssl/service-producer-keystore.p12`      | private key + cert `CN=service-producer` (SAN `localhost`, `127.0.0.1`, `service-producer`) + CA cert | Server identity presented to callers |
-| `ssl/truststore.p12`                     | demo root CA certificate only              | Validating client certificates |
-| `src/test/resources/ssl/service-consumer-keystore.p12` | consumer identity | Integration test: allowed client |
-| `src/test/resources/ssl/service-unknown-keystore.p12`  | CA-signed, `CN=service-unknown` | Integration test: trusted but forbidden |
+| File | Contains | Used for |
+|---|---|---|
+| `src/main/resources/ssl/service-producer-keystore.p12` | private key + cert `CN=service-producer` (SAN `localhost`, `127.0.0.1`, `service-producer`) + CA cert | Server identity presented to callers |
+| `src/main/resources/ssl/truststore.p12` | demo root CA certificate only | Validating client certificates |
+| `src/test/resources/ssl/service-consumer-keystore.p12` | key + cert `CN=service-consumer`, issued by **this** module's script. It's a separate key pair from the consumer module's own keystore | Integration test: allowed client |
+| `src/test/resources/ssl/service-unknown-keystore.p12` | CA-signed, `CN=service-unknown` | Integration test: trusted but forbidden |
 
 Regenerate with this module's own script (shares the root CA in `../certs/out` with the consumer's script):
 
@@ -130,17 +130,18 @@ is explained in [root README — PKI, keystores, TLS handshake](../README.md#pki
 | L4 / TLS | Tomcat + `client-auth: need` | no client cert, self-signed cert, cert from another CA, expired cert | handshake failure (`curl` exit 56, Java `SSLHandshakeException`) |
 | L7 / HTTP | `ClientCertificateFilter` | CA-signed cert whose CN is not in `mtls.allowed-client-cns` | `403 Forbidden` |
 
-Tomcat's check is pure X.509 path validation against `truststore.p12` — it walks the
-presented cert's issuer chain, confirms it terminates at the demo root CA entry, and checks
-the cert (and chain) is within its validity period and correctly signed. That's all it
-checks: **it has no notion of the Common Name**. A trusted-but-unauthorized cert like
-`service-unknown` (§4.1) passes the handshake without issue; identity/authorization is
-entirely the filter's job, one layer up.
+Tomcat's check is standard X.509 path validation (JSSE) against `truststore.p12`. It walks the
+presented cert's issuer chain and confirms it ends at the demo root CA entry. It then checks that
+every cert in the chain is correctly signed and within its validity period, and that the leaf's key
+usage / extended key usage allow TLS client authentication. That's all it checks: **it has no
+notion of the Common Name**, and it does no hostname matching for client certs. A
+trusted-but-unauthorized cert like `service-unknown` (§4.1) passes the handshake without issue;
+identity/authorization is entirely the filter's job, one layer up.
 
 The filter reads the verified chain from the standard servlet attribute
 `jakarta.servlet.request.X509Certificate`, extracts the CN via `LdapName`, and stores it as
 request attribute `mtls.client.cn` so the controller can echo `callerCn`.
-`/actuator/health` is exempt from the CN check (the TLS layer still applies).
+`/actuator/health` is exempt from the CN check (the TLS layer still applies); `/actuator/info` is not.
 
 <a id="database"></a>
 ## <span style="color:hsl(165,80%,45%)">5. 🗄️ Database — PostgreSQL + Flyway</span>
@@ -153,11 +154,14 @@ The container starts with an empty database; **Flyway owns the schema**.
 | `V1__create_greeting_template.sql` | `greeting_template(language_code PK, template, created_at)` with a CHECK that `template` contains `%s` |
 | `V2__seed_greeting_template.sql`   | Seeds `en`, `fr`, `es`, `de`, `hi` |
 
-Add a language without code changes:
+Add a language without code changes. No restart is needed, because every request reads the table:
 
-```sql
-INSERT INTO greeting_template (language_code, template) VALUES ('it', 'Ciao, %s!');
+```bash
+docker exec mtls-postgres psql -U mtls -d mtls_db \
+  -c "INSERT INTO greeting_template (language_code, template) VALUES ('it', 'Ciao, %s!');"
 ```
+
+To keep it reproducible, ship the row as a new migration instead (e.g. `V3__add_italian.sql`).
 
 <a id="encrypted-db-password"></a>
 ## <span style="color:hsl(240,80%,65%)">6. 🔑 Encrypted DB password — Jasypt `ENC(...)`</span>
@@ -183,8 +187,12 @@ jasypt:
 | Plaintext DB password | `mtls_s3cret` (same as `docker-compose.yml`) |
 | Master key (`JASYPT_ENCRYPTOR_PASSWORD`) | `mtls-demo-master-key` |
 
-The master key has **no default** — startup fails fast if the env var is missing, so a
-misconfigured deployment can never silently fall back to a known key.
+The master key has **no default**. If the env var is missing, Spring leaves the placeholder
+unresolved, Jasypt uses the literal text `${JASYPT_ENCRYPTOR_PASSWORD}` as the key, decryption
+fails and startup aborts. A misconfigured deployment therefore never falls back silently to a known
+key, but the error looks the same as a wrong key ([6.7](#jasypt-troubleshooting)). In an IDE, add
+the variable to the run configuration's environment (IntelliJ: *Run → Edit Configurations… →
+ProducerApplication → Environment variables*).
 
 <a id="how-decryption-works"></a>
 ### <span style="color:hsl(80,80%,50%)">6.2 How decryption works at startup</span>
@@ -272,7 +280,7 @@ solves a specific problem:
 | **PBKDF2** (Key Derivation Function) | Runs a PRF many times over *password + salt* to produce key bytes | Makes each password guess expensive for an attacker | 1 000 iterations |
 | **HMAC-SHA512** | Keyed hash used as PBKDF2's pseudo-random function | Mixes password and salt irreversibly; SHA-512 gives plenty of output bits | — |
 | **Salt** | Random bytes stored *in clear* next to the ciphertext | Same password + different salt → different key, so pre-computed (rainbow-table) attacks and cross-value comparisons are useless | 16 random bytes per encryption |
-| **Iterations** (`key-obtention-iterations`) | Number of PBKDF2 rounds | Slows brute force linearly (1 000 rounds = 1 000× the work per guess) | 1 000 (raise to ≥ 100 000 in production if startup time allows) |
+| **Iterations** (`key-obtention-iterations`) | Number of PBKDF2 rounds | Slows brute force linearly (1 000 rounds = 1 000× the work per guess) | 1 000. Raise it in production: OWASP suggests 210 000 for PBKDF2-HMAC-SHA512, and it only runs once per property at startup |
 | **AES-256** | Symmetric block cipher, 128-bit blocks, 256-bit key | Actual confidentiality of the data | key from PBKDF2 |
 | **CBC mode** (Cipher Block Chaining) | Each plaintext block is XOR-ed with the previous ciphertext block before encryption | Identical plaintext blocks don't produce identical ciphertext blocks | — |
 | **IV** (Initialisation Vector) | Random "previous block" for the first CBC block, stored in clear | Same key + same plaintext → different ciphertext; hides repeated values | 16 random bytes (`RandomIvGenerator`) |
@@ -314,7 +322,8 @@ java -cp ~/.m2/repository/org/jasypt/jasypt/1.9.3/jasypt-1.9.3.jar \
   org.jasypt.intf.cli.JasyptPBEStringDecryptionCLI \
   input='NO0tYiQShpiblv/VUfihJX9MT1/xeEAuV5taQv2avcJV+qFzwnjquEvz7qIJYZYC' \
   password="$JASYPT_ENCRYPTOR_PASSWORD" \
-  algorithm=PBEWITHHMACSHA512ANDAES_256 ivGeneratorClassName=org.jasypt.iv.RandomIvGenerator
+  algorithm=PBEWITHHMACSHA512ANDAES_256 \
+  ivGeneratorClassName=org.jasypt.iv.RandomIvGenerator keyObtentionIterations=1000
 # ----OUTPUT----
 # mtls_s3cret
 ```
@@ -322,7 +331,9 @@ java -cp ~/.m2/repository/org/jasypt/jasypt/1.9.3/jasypt-1.9.3.jar \
 <a id="rotating-the-db-password"></a>
 ### <span style="color:hsl(0,70%,60%)">6.6 Rotating the DB password</span>
 
-1. Change the password in PostgreSQL (`ALTER ROLE mtls PASSWORD '…'`) and in `docker-compose.yml`/secret store.
+1. Change the password in PostgreSQL (`ALTER ROLE mtls PASSWORD '…'`), then in `docker-compose.yml` / your
+   secret store. `POSTGRES_PASSWORD` only applies when the volume is first initialised, so `ALTER ROLE` is
+   what actually changes it.
 2. Encrypt the new value with the **same** master key (6.5) and replace the `ENC(...)` value.
 3. Restart the service.
 
@@ -334,9 +345,14 @@ the new key, then deploy with the new `JASYPT_ENCRYPTOR_PASSWORD`.
 
 | Symptom | Cause |
 |---|---|
-| `Failed to bind properties under 'spring.datasource.password'` at startup | `JASYPT_ENCRYPTOR_PASSWORD` not set — the `ENC(...)` value cannot be decrypted |
-| `EncryptionOperationNotPossibleException` / `DecryptionException` | Wrong master key, or algorithm / IV generator / iterations differ from those used to encrypt |
+| `APPLICATION FAILED TO START` · `Failed to bind properties under 'spring.datasource.password' to java.lang.String` | `JASYPT_ENCRYPTOR_PASSWORD` **unset or wrong**, or algorithm / IV generator / iterations differ from those used to encrypt. Unset and wrong look identical, because an unset variable leaves the literal `${JASYPT_ENCRYPTOR_PASSWORD}` as the key |
 | `password authentication failed for user "mtls"` | Decryption worked but the plaintext does not match the DB password |
+
+The real cause is only logged at debug level. To see it, start with
+`LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_BOOT_DIAGNOSTICS=debug` (or
+`--logging.level.org.springframework.boot.diagnostics=debug`). The output then shows
+`DecryptionException: Unable to decrypt property: ENC(…) … Decryption of Properties failed, make sure
+encryption/decryption passwords match`, caused by `EncryptionOperationNotPossibleException`.
 
 <a id="api"></a>
 ## <span style="color:hsl(300,70%,60%)">7. 🌐 API</span>
@@ -356,18 +372,19 @@ the new key, then deploy with the new `JASYPT_ENCRYPTOR_PASSWORD`.
   "language": "fr",
   "servedBy": "service-producer",
   "callerCn": "service-consumer",
-  "timestamp": "2026-09-23T16:21:54.417Z"
+  "timestamp": "2026-09-23T18:41:56.691413916Z"
 }
 ```
 
 | Status | When |
 |---|---|
 | `200` | Allowed client, language exists |
-| `403` | Trusted cert, CN not allow-listed |
-| `404` | Unknown `lang` (`application/problem+json`) |
-| *(handshake failure)* | No / untrusted client certificate |
+| `403` | Trusted cert, CN not allow-listed. The body is Spring Boot's default error JSON (`application/json`), not a problem detail, because the filter rejects the request before Spring MVC |
+| `404` | Unknown `lang` (`application/problem+json`, `detail`: `No greeting template for language 'xx'`) |
+| *(handshake failure)* | No / untrusted client certificate: TLS alert, no HTTP response |
 
-Actuator: `GET /actuator/health`, `GET /actuator/info` (client cert still required).
+Actuator (a client cert is always required): `GET /actuator/health` accepts any CA-signed cert
+because it's exempt from the CN check. `GET /actuator/info` needs an allow-listed CN.
 
 <a id="configuration-reference"></a>
 ## <span style="color:hsl(30,80%,55%)">8. ⚙️ Configuration reference</span>
@@ -377,6 +394,7 @@ Actuator: `GET /actuator/health`, `GET /actuator/info` (client cert still requir
 | `JASYPT_ENCRYPTOR_PASSWORD` | *(required)* | Master key to decrypt `ENC(...)` values |
 | `DB_HOST` / `DB_PORT` / `DB_NAME` | `localhost` / `5434` / `mtls_db` | JDBC URL parts |
 | `DB_USERNAME` | `mtls` | DB user |
+| `SPRING_DATASOURCE_PASSWORD` | `ENC(...)` in `application.yml` | Overrides the DB password, plain or `ENC(...)` (env values are decrypted too) |
 | `SSL_KEYSTORE_LOCATION` | `classpath:ssl/service-producer-keystore.p12` | Override to `file:/path` for mounted secrets |
 | `SSL_TRUSTSTORE_LOCATION` | `classpath:ssl/truststore.p12` | Same |
 | `KEYSTORE_PASSWORD` / `TRUSTSTORE_PASSWORD` | `changeit` | Store passwords |
@@ -399,7 +417,10 @@ export JASYPT_ENCRYPTOR_PASSWORD=mtls-demo-master-key
 mvn spring-boot:run                              # DevTools restarts on recompile
 ```
 
-Smoke test with `curl` (PEM files are written to `certs/out/` by the generate scripts):
+In an IDE, set the same variable in the run configuration ([6.1](#jasypt-configuration)).
+
+Smoke test with `curl`. The PEM files live in `certs/out/`, which is git-ignored; on a fresh clone,
+create them first ([root README → Quick start](../README.md#quick-start), step 3):
 
 ```bash
 cd certs/out
@@ -411,6 +432,7 @@ curl --cacert ca.crt --cert service-unknown.crt --key service-unknown.key \
      -o /dev/null -w '%{http_code}\n' https://localhost:8443/api/v1/greetings/x
 # handshake failure — no client cert
 curl --cacert ca.crt https://localhost:8443/api/v1/greetings/x
+# curl: (56) … tlsv13 alert certificate required
 ```
 
 <a id="testing"></a>
@@ -421,7 +443,10 @@ mvn -pl service-producer verify      # needs a Docker daemon (Testcontainers)
 ```
 
 `MtlsIntegrationTest` starts the app on a random HTTPS port against a Testcontainers
-`postgres:19beta3` (Flyway applies V1/V2) and asserts:
+`postgres:19beta3` (Flyway applies V1/V2). It sets `jasypt.encryptor.password` itself, so no env var
+is needed. Client identities come from `src/test/resources/ssl`, and the main `truststore.p12`
+doubles as the clients' truststore. Because the class name ends in `Test`, Surefire runs it in the
+`test` phase, so `mvn test` needs Docker as well. It asserts:
 
 | Test | Client identity | Expected |
 |---|---|---|
@@ -440,13 +465,16 @@ service-producer
     ├── main
     │   ├── java/com/org/mtls/producer
     │   │   ├── ProducerApplication.java
-    │   │   ├── greeting
-    │   │   │   ├── GreetingController.java   GET /api/v1/greetings/{name}
-    │   │   │   ├── GreetingTemplate.java     record entity
-    │   │   │   └── GreetingTemplateRepository.java
-    │   │   └── security
-    │   │       ├── ClientCertificateFilter.java  CN allow-list
-    │   │       └── MtlsProperties.java
+    │   │   ├── config
+    │   │   │   └── MtlsProperties.java           mtls.allowed-client-cns
+    │   │   ├── controller
+    │   │   │   └── GreetingController.java       GET /api/v1/greetings/{name}
+    │   │   ├── entites
+    │   │   │   └── GreetingTemplate.java         record entity
+    │   │   ├── filter
+    │   │   │   └── ClientCertificateFilter.java  CN allow-list
+    │   │   └── repository
+    │   │       └── GreetingTemplateRepository.java
     │   └── resources
     │       ├── application.yml
     │       ├── banner.txt

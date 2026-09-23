@@ -53,6 +53,8 @@ identity with an X.509 certificate issued by a private demo CA, and each side va
 other's certificate. The producer stores data in PostgreSQL and keeps its DB password
 encrypted in configuration.
 
+Just want to run it? Jump to [Quick start](#quick-start).
+
 ```mermaid
 flowchart LR
     curl -- "HTTPS (one-way TLS)" --> C["service-consumer<br/>:9443"]
@@ -68,17 +70,24 @@ flowchart LR
 | [`service-producer`](service-producer) | mTLS server; reads greetings from PostgreSQL; CN allow-list; Jasypt-encrypted DB password | [README](service-producer/README.md) |
 | [`service-consumer`](service-consumer) | mTLS client; calls the producer with its client cert via `RestClient` + SSL bundle | [README](service-consumer/README.md) |
 | `docker-compose.yml` | PostgreSQL `19beta3` for the producer (host port 5434) | — |
-| `certs/out/` (git-ignored) | Shared root CA (`ca.key`, `ca.crt`) + PEM copies, written by the generate scripts | — |
+| `certs/out/` (git-ignored) | Shared root CA (`ca.key`, `ca.crt`) + PEM copies for `curl` / `openssl`. Written by the generate scripts, or extracted from the committed stores ([Quick start](#quick-start)) | — |
 
 <a id="maven-structure"></a>
 ## <span style="color:hsl(331,80%,58%)">3. 🏗️ Maven structure</span>
 
 ```
-com.org.llm:super-pom:1.0.0          (Spring Boot 4.1.0 parent, learning-bom, plugins, enforcer)
-└── com.org.mtls:learning-mtls        (this aggregator — shared deps: webmvc, actuator, Lombok, DevTools)
-    ├── service-producer
-    └── service-consumer
+org.springframework.boot:spring-boot-starter-parent:4.1.0
+└── com.org.llm:super-pom:1.0.0           (Java 25, learning-bom, build-info, git-commit-id, enforcer, Surefire/Failsafe, profiles)
+    └── com.org.mtls:learning-mtls        (this aggregator — shared deps: webmvc, actuator, Lombok, DevTools, webmvc-test;
+        │                                  manages jasypt-spring-boot-starter 4.0.4)
+        ├── service-producer
+        └── service-consumer
 ```
+
+`super-pom` is **not on Maven Central**. The aggregator declares it with an empty `<relativePath/>`,
+so it must already be in your local repository (`mvn install` it from its own project). Its enforcer
+accepts Java 21+ and Maven 3.9+, but `maven.compiler.release` is 25, so the build needs **JDK 25 or
+newer**.
 
 <a id="certificates"></a>
 ## <span style="color:hsl(56,80%,50%)">4. 🔑 Certificates and generate scripts</span>
@@ -110,7 +119,19 @@ material so the project runs out of the box; `ca.key` is never committed.
 ```bash
 service-consumer/src/main/resources/ssl/generate-certs.sh
 service-producer/src/main/resources/ssl/generate-certs.sh
+# optional overrides: STORE_PASSWORD (default changeit), CA_DIR (default <repo>/certs/out)
 ```
+
+Things worth knowing before you run them:
+
+- **Running a script re-issues the committed `.p12` files.** To just get PEM files for `curl` on a
+  fresh clone, extract them from the committed stores instead ([Quick start](#quick-start), step 3).
+- **There are two `CN=service-consumer` certificates.** The consumer's script issues the consumer's
+  real keystore. The producer's script issues the producer's *test* keystore (the integration-test
+  client). They are separate key pairs with different serials, from the same CA and with the same
+  CN. The producer accepts both because it only checks the chain and the CN.
+- Both scripts write `certs/out/service-consumer.{crt,key}`, so the PEM pair there belongs to
+  whichever script ran last. Either pair works for `curl`.
 
 <a id="security-goals"></a>
 ## <span style="color:hsl(0,75%,60%)">5. 🛡️ Security goals and threat model</span>
@@ -412,7 +433,8 @@ flowchart TB
 Trust is **transitive through signatures**: the producer never saw `service-consumer.crt`
 before, but it trusts the root, and the root's signature on the consumer cert verifies — so the
 consumer cert is trusted. `service-unknown` is equally trusted at the TLS layer; only the CN
-allow-list (section 10) stops it.
+allow-list (section 10) stops it. (The fingerprint above belongs to the committed demo CA; it
+changes whenever the CA is regenerated.)
 
 <a id="csr-flow"></a>
 ### <span style="color:hsl(80,80%,50%)">7.2 How a certificate is issued (CSR flow)</span>
@@ -458,7 +480,9 @@ Certificate
 │       ├── basicConstraints   critical, CA:FALSE
 │       ├── keyUsage           critical, digitalSignature, keyEncipherment
 │       ├── extendedKeyUsage   serverAuth, clientAuth
-│       └── subjectAltName     DNS:service-producer, DNS:localhost, IP:127.0.0.1
+│       ├── subjectAltName     DNS:service-producer, DNS:localhost, IP:127.0.0.1
+│       ├── subjectKeyIdentifier     hash of this cert's public key    (added by OpenSSL)
+│       └── authorityKeyIdentifier   = issuer's subjectKeyIdentifier    (added by OpenSSL)
 ├── signatureAlgorithm         sha256WithRSAEncryption
 └── signatureValue             CA's RSA signature over TBSCertificate
 ```
@@ -469,6 +493,7 @@ Certificate
 | `keyUsage` | yes | Raw key operations: `digitalSignature` (sign handshake), `keyEncipherment` (legacy RSA key transport). CA: `keyCertSign, cRLSign` |
 | `extendedKeyUsage` | no | Protocol roles: `serverAuth` = may be a TLS server, `clientAuth` = may be a TLS client. Both set so one identity works in both directions |
 | `subjectAltName` | no | Names the cert is valid for — **used for hostname verification** |
+| `subjectKeyIdentifier` / `authorityKeyIdentifier` | no | Key IDs that link a cert to its issuer's key, which helps path building when a CA has several keys. OpenSSL 3 adds both automatically; the scripts don't ask for them |
 
 *Critical* = a validator that doesn't understand the extension must reject the cert.
 
@@ -480,7 +505,7 @@ What the JSSE `TrustManager` does with the chain the peer sends (RFC 5280):
 ```mermaid
 flowchart TB
     START(["peer sends: leaf + CA cert"]) --> BUILD{"Build path from leaf<br/>to a cert in MY truststore?"}
-    BUILD -- "no" --> F1["❌ PKIX path building failed<br/>alert: unknown_ca / certificate_unknown"]
+    BUILD -- "no" --> F1["❌ PKIX path building failed<br/>alert: certificate_unknown (JSSE)"]
     BUILD -- "yes" --> SIG{"Every signature in path<br/>verifies with issuer's public key?"}
     SIG -- "no" --> F2["❌ bad_certificate"]
     SIG -- "yes" --> DATE{"now within notBefore…notAfter<br/>for every cert?"}
@@ -547,8 +572,8 @@ flowchart LR
         PKS["service-producer-keystore.p12<br/>🔒 key + cert"]
         PTS["truststore.p12<br/>CA"]
     end
-    CKS -- "① client cert + CertificateVerify<br/>validated by producer truststore" --> PTS
-    PKS -- "② server cert + CertificateVerify<br/>validated by consumer truststore" --> CTS
+    PKS -- "① server cert + CertificateVerify<br/>validated by consumer truststore" --> CTS
+    CKS -- "② client cert + CertificateVerify<br/>validated by producer truststore" --> PTS
 ```
 
 | File | Role | Entry | Alias |
@@ -674,16 +699,17 @@ TLS 1.2:   ECDHE - RSA - AES256-GCM - SHA384
 <a id="negotiated-parameters"></a>
 ### <span style="color:hsl(165,80%,45%)">9.4 What this project actually negotiates</span>
 
-Verified with `openssl s_client` (OpenSSL 3.5) and `-Djavax.net.debug=ssl:handshake` on the consumer (JDK 26):
+Verified with `openssl s_client` (OpenSSL 3.5) and `-Djavax.net.debug=ssl:handshake` on the consumer (JDK 25):
 
 | Parameter | Consumer (JDK) → Producer | `openssl s_client` → Producer | `-tls1_2` forced |
 |---|---|---|---|
 | Protocol | **TLSv1.3** | TLSv1.3 | TLSv1.2 |
 | Cipher suite | `TLS_AES_256_GCM_SHA384` | `TLS_AES_256_GCM_SHA384` | `ECDHE-RSA-AES256-GCM-SHA384` |
-| Key exchange group | `x25519` | X25519 (253 bits) | ECDHE |
-| Server signature | — | `rsa_pss_rsae_sha256` | — |
+| Key exchange group | `x25519` | X25519 (253 bits) | X25519 (253 bits) |
+| Server signature | `rsa_pss_rsae_sha256` | `rsa_pss_rsae_sha256` | `rsa_pss_rsae_sha256` (signs `ServerKeyExchange`) |
+| Client signature (`CertificateVerify`) | `rsa_pss_rsae_sha256` | — | — |
 | Server key | RSA 2048 | RSA 2048 | RSA 2048 |
-| Client CAs requested by producer | — | `CN=mTLS Demo Root CA, O=com.org` | same |
+| Client CAs requested by producer | `certificate_authorities` extension: `CN=mTLS Demo Root CA, O=com.org` | `CN=mTLS Demo Root CA, O=com.org` | same |
 | TLS 1.1 attempt | — | refused — alert 70 `protocol_version` | — |
 
 <a id="the-mtls-handshake"></a>
@@ -754,11 +780,11 @@ that produced them — altering any message changes all keys.
 
 | Situation | Alert | What you see |
 |---|---|---|
-| Client sends no cert to producer | `certificate_required` (116) / `bad_certificate` | `curl: (56) … alert` · Java `SSLHandshakeException` → consumer `502` |
-| Client cert signed by unknown CA (self-signed rogue) | `unknown_ca` / `certificate_unknown` | `curl` exit 56 |
-| Consumer truststore lacks producer's CA | client aborts with `certificate_unknown` | `PKIX path building failed … unable to find valid certification path` → `502` |
-| Host not in SAN | client aborts | `No subject alternative names matching IP address …` |
-| Expired cert | `certificate_expired` | `CertificateExpiredException` |
+| Client sends no cert to producer | TLS 1.3: `certificate_required` (116) · TLS 1.2: `bad_certificate` (42) | `curl: (56) … tlsv13 alert certificate required` · Java `SSLHandshakeException` → consumer `502` |
+| Client cert not signed by the demo CA (e.g. self-signed rogue) | `certificate_unknown` (46), JSSE's alert for any PKIX failure | `curl: (56) … alert certificate unknown` |
+| Consumer truststore lacks producer's CA | consumer aborts with `certificate_unknown` (46) | `(certificate_unknown) PKIX path building failed … unable to find valid certification path to requested target` → `502` |
+| Host not in SAN | client aborts | `No subject alternative names matching IP address …` / `No name matching … found` |
+| Expired cert | `certificate_expired` (45) | `CertificateExpiredException` |
 | TLS 1.1 offered | `protocol_version` (70) | `tlsv1 alert protocol version` |
 | Tampered record | `bad_record_mac` (20) | connection reset |
 | CA-trusted cert, CN not allow-listed | *(no alert — TLS succeeded)* | HTTP `403` |
@@ -818,20 +844,25 @@ flowchart TB
     OPT --> HC
 ```
 
+Startup of `service-consumer`, which uses the bundle on both sides:
+
 ```mermaid
 sequenceDiagram
-    participant Boot as Spring Boot startup
+    participant Boot as Spring Boot startup (consumer)
     participant Reg as SslBundles
     participant Tom as Tomcat
     participant RC as ProducerClientConfig
     Boot->>Reg: bind spring.ssl.bundle.jks.* → load PKCS12 stores (password → PBKDF2 → decrypt)
-    Boot->>Tom: server.ssl.bundle=service-producer → SSLContext + client-auth=need
-    Tom->>Tom: listen https :8443
+    Boot->>Tom: server.ssl.bundle=service-consumer → SSLContext (client-auth none)
+    Tom->>Tom: listen https :9443
     Boot->>RC: create producerRestClient
     RC->>Reg: getBundle("service-consumer")
-    RC->>RC: HttpClientSettings.ofSslBundle(bundle).withTimeouts(5s)
+    RC->>RC: HttpClientSettings.ofSslBundle(bundle).withTimeouts(5s, 5s)
     RC->>RC: ClientHttpRequestFactoryBuilder.detect() → JDK HttpClient with SSLContext
 ```
+
+`service-producer` starts the same way with bundle `service-producer`, `client-auth=need` and port
+`:8443`. It creates no `RestClient`.
 
 | Config | Effect |
 |---|---|
@@ -883,6 +914,9 @@ sequenceDiagram
 
 Full details — ciphertext byte layout, salt vs IV, encrypt/decrypt CLI, rotation and
 troubleshooting — are in the [producer README](service-producer/README.md#encrypted-db-password).
+If `JASYPT_ENCRYPTOR_PASSWORD` is unset **or** wrong, startup aborts with the same
+`Failed to bind properties under 'spring.datasource.password'` error; see
+[troubleshooting](service-producer/README.md#jasypt-troubleshooting).
 
 | Protects | Doesn't protect |
 |---|---|
@@ -976,18 +1010,57 @@ java -Djavax.net.debug=ssl:handshake -jar service-consumer/target/service-consum
 <a id="quick-start"></a>
 ## <span style="color:hsl(120,60%,45%)">16. 🚀 Quick start</span>
 
+| Prerequisite | Why |
+|---|---|
+| JDK 25+ | `maven.compiler.release` is 25 (from super-pom) |
+| Maven 3.9+ | Enforced by super-pom |
+| `com.org.llm:super-pom:1.0.0` in `~/.m2` | Parent POM; not on Maven Central (section 3) |
+| Docker | PostgreSQL via `docker compose`; Testcontainers during the build's tests |
+| `curl`, OpenSSL, `keytool` (ships with the JDK) | Calling the services; PEM extraction; cert scripts |
+
 ```bash
+# 1. PostgreSQL 19 on :5434
 docker compose up -d --wait
+
+# 2. Build + test (the Testcontainers integration test needs Docker; add -DskipTests to skip it)
 mvn clean package
 
-# terminal 1
+# 3. PEM files for curl. certs/out/ is git-ignored, so a fresh clone has none.
+#    Extract them from the committed stores (the stores are left untouched):
+mkdir -p certs/out
+keytool -exportcert -rfc -alias mtls-demo-ca -storepass changeit \
+  -keystore service-consumer/src/main/resources/ssl/truststore.p12 -file certs/out/ca.crt
+openssl pkcs12 -passin pass:changeit -clcerts -nokeys \
+  -in service-consumer/src/main/resources/ssl/service-consumer-keystore.p12 -out certs/out/service-consumer.crt
+openssl pkcs12 -passin pass:changeit -nocerts -nodes \
+  -in service-consumer/src/main/resources/ssl/service-consumer-keystore.p12 -out certs/out/service-consumer.key
+openssl pkcs12 -passin pass:changeit -clcerts -nokeys \
+  -in service-producer/src/test/resources/ssl/service-unknown-keystore.p12 -out certs/out/service-unknown.crt
+openssl pkcs12 -passin pass:changeit -nocerts -nodes \
+  -in service-producer/src/test/resources/ssl/service-unknown-keystore.p12 -out certs/out/service-unknown.key
+
+# 4. Run: one terminal each, from the repo root
 cd service-producer && JASYPT_ENCRYPTOR_PASSWORD=mtls-demo-master-key mvn spring-boot:run
-# terminal 2
 cd service-consumer && mvn spring-boot:run
 
-# certs/out/ca.crt is created by the generate scripts (section 4)
+# 5. Call the consumer; it calls the producer over mTLS
 curl --cacert certs/out/ca.crt "https://localhost:9443/api/v1/hello/himansu?lang=fr"
+# {"consumer":"service-consumer","upstream":{"message":"Bonjour, himansu !","language":"fr",
+#  "servedBy":"service-producer","callerCn":"service-consumer","timestamp":"…"}}
+
+# 6. Stop PostgreSQL when done (add -v to also delete the database volume)
+docker compose down
 ```
+
+- **Running from an IDE:** add `JASYPT_ENCRYPTOR_PASSWORD=mtls-demo-master-key` to the
+  `ProducerApplication` run configuration's environment variables. Without it, startup fails with
+  `Failed to bind properties under 'spring.datasource.password'`.
+- Instead of step 3 you can run both generate scripts (section 4). That also fills `certs/out/`,
+  but it creates a new CA and re-issues every committed store.
+- The extracted PEMs include no `ca.key`. If you run a generate script later, it creates a new CA,
+  so run **both** scripts.
+- More calls to try (`403`, `404`, handshake failure) are in the
+  [producer README](service-producer/README.md#running-locally).
 
 <a id="maven-commands"></a>
 ## <span style="color:hsl(30,80%,55%)">17. 🔨 Maven commands</span>
@@ -995,6 +1068,11 @@ curl --cacert certs/out/ca.crt "https://localhost:9443/api/v1/hello/himansu?lang
 | Command | What it does |
 |---|---|
 | `mvn verify` | Build both modules, run unit + Testcontainers integration tests (Docker required) |
-| `mvn -pl service-producer spring-boot:run` | Run one module |
-| `mvn -Psecurity-scan verify` | OWASP dependency check (profile from super-pom) |
+| `mvn package -DskipTests` | Build the jars only; no Docker needed |
+| `JASYPT_ENCRYPTOR_PASSWORD=mtls-demo-master-key mvn -pl service-producer spring-boot:run` | Run the producer from the repo root |
+| `mvn -pl service-consumer spring-boot:run` | Run the consumer from the repo root |
+| `mvn -Psecurity-scan verify` | OWASP dependency check (profile from super-pom; reads `NVD_API_KEY`, which dependency-check strongly recommends setting) |
 | `mvn -Pmutation-test test` | PIT mutation testing (profile from super-pom) |
+
+`MtlsIntegrationTest` ends in `Test`, so Surefire runs it in the `test` phase. That means
+`mvn test` and `mvn package` need Docker too, unless you pass `-DskipTests`.

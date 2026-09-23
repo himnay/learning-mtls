@@ -17,17 +17,18 @@
 <a id="stack"></a>
 ## <span style="color:hsl(278,80%,58%)">1. 🧰 Stack</span>
 
-| Component     | Version / Detail                                          |
-|---------------|-----------------------------------------------------------|
-| Java          | 25 (enforced by super-pom: 21+)                           |
-| Spring Boot   | 4.1.0 (via `learning-mtls` → `super-pom`)                 |
-| Web           | Spring MVC on embedded Tomcat, HTTPS (port `9443`)        |
-| HTTP client   | Spring `RestClient` + JDK `HttpClient` (auto-detected)    |
-| TLS           | Spring Boot SSL bundles, PKCS12, TLS 1.3 / 1.2            |
-| Boilerplate   | Lombok + Java records                                     |
-| Dev loop      | Spring Boot DevTools (auto-restart)                       |
-| Tests         | JUnit 5, `@WebMvcTest`, Mockito                           |
-| Build         | Maven 3.9+                                                |
+| Component   | Version / Detail                                            |
+|-------------|-------------------------------------------------------------|
+| Java        | 25 (`maven.compiler.release` from super-pom; needs JDK 25+) |
+| Spring Boot | 4.1.0 (via `learning-mtls` → `super-pom`)                   |
+| Web         | Spring MVC on embedded Tomcat, HTTPS (port `9443`)          |
+| HTTP client | Spring `RestClient` + JDK `HttpClient` (auto-detected)      |
+| JSON        | Jackson 3 (`tools.jackson`, the Spring Boot 4 default)      |
+| TLS         | Spring Boot SSL bundles, PKCS12, TLS 1.3 / 1.2              |
+| Boilerplate | Lombok + Java records                                       |
+| Dev loop    | Spring Boot DevTools (auto-restart)                         |
+| Tests       | JUnit Jupiter 6, `@WebMvcTest`, Mockito                     |
+| Build       | Maven 3.9+                                                  |
 
 <a id="what-this-service-does"></a>
 ## <span style="color:hsl(56,80%,50%)">2. 🎯 What this service does</span>
@@ -60,10 +61,10 @@ Both sides validate each other:
 | Feature | Where | Why |
 |---|---|---|
 | **Spring Boot SSL bundle** (`spring.ssl.bundle.jks.service-consumer`) | `application.yml` | Single definition of identity + trust, reused for the inbound server *and* the outbound client. |
-| **`HttpClientSettings.ofSslBundle(...)` + `ClientHttpRequestFactoryBuilder.detect()`** | `client/ProducerClientConfig` | Builds a TLS-aware request factory from the bundle and applies connect/read timeouts in one place. |
+| **`HttpClientSettings.ofSslBundle(...)` + `ClientHttpRequestFactoryBuilder.detect()`** | `config/ProducerClientConfig` | Builds a TLS-aware request factory from the bundle and applies connect/read timeouts in one place. |
 | **Dedicated `RestClient` bean** | `ProducerClientConfig#producerRestClient` | Base URL + mTLS bound once; callers just use `.get().uri(...)`. |
-| **`@ConfigurationProperties` record** | `client/ProducerClientProperties` | Type-safe `clients.producer.*` (base URL, bundle name, timeout with `@DefaultValue`). |
-| **`@RestControllerAdvice` → Problem Details** | `web/UpstreamExceptionHandler` | Handshake / IO failures → `502`, upstream `404` → `404`, other upstream errors → `502`, all as RFC 9457 JSON. |
+| **`@ConfigurationProperties` record** | `config/ProducerClientProperties` | Type-safe `clients.producer.*` (base URL, bundle name, timeout with `@DefaultValue`). |
+| **`@RestControllerAdvice` → Problem Details** | `exception/UpstreamExceptionHandler` | Handshake / IO failures → `502`, upstream `404` → `404`, other upstream errors → `502`, all as RFC 9457 JSON. |
 | **Lombok** | `@RequiredArgsConstructor`, `@Slf4j` | No hand-written constructors or logger fields. |
 | **Records** | `Greeting`, `HelloResponse`, properties | Immutable DTOs. |
 | **DevTools** | root `pom.xml` (runtime, optional) | Auto-restart on recompile; not packaged into the jar. |
@@ -98,8 +99,12 @@ service-consumer/src/main/resources/ssl/generate-certs.sh
 ```
 
 It creates the CA on first run, issues a fresh `service-consumer` key + certificate and
-rebuilds `truststore.p12`. The script is excluded from the jar. Keystore vs truststore,
-X.509 fields, PKCS#12 and the mTLS handshake are explained in
+rebuilds `truststore.p12`. The script is excluded from the jar.
+
+The producer's script issues its own, separate `CN=service-consumer` test certificate (in
+`service-producer/src/test/resources/ssl/`), so regenerating here doesn't touch that one. Both
+scripts write `../certs/out/service-consumer.{crt,key}`, and the last one to run wins. Keystore vs
+truststore, X.509 fields, PKCS#12 and the mTLS handshake are explained in
 [root README — PKI, keystores, TLS handshake](../README.md#pki).
 
 ### <span style="color:hsl(80,80%,50%)">4.2 Wiring</span>
@@ -143,7 +148,7 @@ Hostname verification stays **on**: the producer cert's SAN must match the host 
     "language": "fr",
     "servedBy": "service-producer",
     "callerCn": "service-consumer",
-    "timestamp": "2026-09-23T16:21:54.417Z"
+    "timestamp": "2026-09-23T18:41:56.596346460Z"
   }
 }
 ```
@@ -157,7 +162,13 @@ Hostname verification stays **on**: the producer cert's SAN must match the host 
 |---|---|---|
 | TLS handshake fails (untrusted producer cert, producer rejects our cert), connection refused, timeout | `ResourceAccessException` | `502` — `service-producer unreachable or TLS handshake failed` |
 | Producer `404` (unknown language) | `HttpClientErrorException.NotFound` | `404` — `Greeting not found upstream` |
-| Producer `403` or any other error | `RestClientResponseException` | `502` — `service-producer responded <status>` |
+| Producer `403` or any other error | `RestClientResponseException` | `502` — `service-producer responded <status>`, e.g. `service-producer responded 403 FORBIDDEN` |
+
+Every error body is `application/problem+json`, for example:
+
+```json
+{"detail":"service-producer unreachable or TLS handshake failed","instance":"/api/v1/hello/x","status":502,"title":"Bad Gateway"}
+```
 
 <a id="configuration-reference"></a>
 ## <span style="color:hsl(30,80%,55%)">7. ⚙️ Configuration reference</span>
@@ -184,18 +195,28 @@ Start [`service-producer`](../service-producer/README.md#running-locally) first,
 cd service-consumer
 mvn spring-boot:run                               # DevTools restarts on recompile
 
-# from certs/out
+# from certs/out (fresh clone? create the PEMs first: root README → Quick start, step 3)
 curl --cacert ca.crt "https://localhost:9443/api/v1/hello/himansu?lang=fr"
 ```
 
-Verify the consumer really validates the producer — point it at a truststore that does **not**
-contain the demo CA:
+Verify the consumer really validates the producer. Stop the consumer, then restart it with a
+truststore that does **not** contain the demo CA:
 
 ```bash
-SSL_TRUSTSTORE_LOCATION=file:/path/to/other-truststore.p12 mvn spring-boot:run
+# a throwaway CA that the producer's certificate does not chain to
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=Rogue CA" \
+  -keyout /tmp/rogue.key -out /tmp/rogue.crt
+keytool -importcert -noprompt -alias rogue -file /tmp/rogue.crt \
+  -keystore /tmp/other-truststore.p12 -storetype PKCS12 -storepass changeit
+
+SSL_TRUSTSTORE_LOCATION=file:/tmp/other-truststore.p12 mvn spring-boot:run
 curl -k https://localhost:9443/api/v1/hello/x
-# 502 … log: PKIX path building failed … unable to find valid certification path
+# 502 {"detail":"service-producer unreachable or TLS handshake failed", …}
+# log: (certificate_unknown) PKIX path building failed … unable to find valid certification path to requested target
 ```
+
+Inbound HTTPS on `:9443` keeps working because the truststore is only used for outbound calls.
+`:9443` doesn't request client certificates.
 
 <a id="testing"></a>
 ## <span style="color:hsl(120,60%,45%)">9. 🧪 Testing</span>
@@ -211,8 +232,11 @@ mvn -pl service-consumer verify
 | `wrapsUpstreamGreeting` | `200`, upstream greeting wrapped with `consumer` field |
 | `handshakeFailureBecomesBadGateway` | `ResourceAccessException` → `502` problem detail |
 
-The real TLS handshake is covered end-to-end by `service-producer`'s `MtlsIntegrationTest`,
-which uses this service's client keystore.
+No automated test drives this module's `RestClient` + SSL bundle against a live producer. The mTLS
+handshake is tested from the producer side: `service-producer`'s `MtlsIntegrationTest` uses the
+producer module's own `CN=service-consumer` test keystore (`service-producer/src/test/resources/ssl/`).
+That is a separately issued key pair, not this module's keystore. To check this module's wiring end to
+end, use the `curl` flow in [Running locally](#running-locally).
 
 <a id="project-layout"></a>
 ## <span style="color:hsl(260,60%,65%)">10. 📁 Project layout</span>
@@ -225,17 +249,19 @@ service-consumer
     │   ├── java/com/org/mtls/consumer
     │   │   ├── ConsumerApplication.java
     │   │   ├── client
-    │   │   │   ├── ProducerClient.java          calls GET /api/v1/greetings/{name}
-    │   │   │   ├── ProducerClientConfig.java    RestClient + SSL bundle
-    │   │   │   └── ProducerClientProperties.java
-    │   │   └── web
-    │   │       ├── HelloController.java         GET /api/v1/hello/{name}
-    │   │       └── UpstreamExceptionHandler.java
+    │   │   │   └── ProducerClient.java            calls GET /api/v1/greetings/{name}
+    │   │   ├── config
+    │   │   │   ├── ProducerClientConfig.java      RestClient + SSL bundle
+    │   │   │   └── ProducerClientProperties.java  clients.producer.*
+    │   │   ├── controller
+    │   │   │   └── HelloController.java           GET /api/v1/hello/{name}
+    │   │   └── exception
+    │   │       └── UpstreamExceptionHandler.java  upstream failures → problem details
     │   └── resources
     │       ├── application.yml
     │       ├── banner.txt
     │       └── ssl/generate-certs.sh, service-consumer-keystore.p12, truststore.p12
-    └── test/java/com/org/mtls/consumer/web/HelloControllerTest.java
+    └── test/java/com/org/mtls/consumer/controller/HelloControllerTest.java
 ```
 
 <a id="production-notes"></a>
