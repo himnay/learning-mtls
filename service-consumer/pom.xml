@@ -20,4 +20,19 @@
             <artifactId>spring-boot-starter-restclient</artifactId>
         </dependency>
     </dependencies>
+
+    <build>
+        <plugins>
+            <!-- generate-certs.sh sits next to the stores in resources/ssl but must not ship in the jar -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <configuration>
+                    <excludes>
+                        <exclude>ssl/*.sh</exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
 </project>
