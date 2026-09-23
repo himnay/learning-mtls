@@ -124,6 +124,13 @@ is explained in [root README — PKI, keystores, TLS handshake](../README.md#pki
 | L4 / TLS | Tomcat + `client-auth: need` | no client cert, self-signed cert, cert from another CA, expired cert | handshake failure (`curl` exit 56, Java `SSLHandshakeException`) |
 | L7 / HTTP | `ClientCertificateFilter` | CA-signed cert whose CN is not in `mtls.allowed-client-cns` | `403 Forbidden` |
 
+Tomcat's check is pure X.509 path validation against `truststore.p12` — it walks the
+presented cert's issuer chain, confirms it terminates at the demo root CA entry, and checks
+the cert (and chain) is within its validity period and correctly signed. That's all it
+checks: **it has no notion of the Common Name**. A trusted-but-unauthorized cert like
+`service-unknown` (§4.1) passes the handshake without issue; identity/authorization is
+entirely the filter's job, one layer up.
+
 The filter reads the verified chain from the standard servlet attribute
 `jakarta.servlet.request.X509Certificate`, extracts the CN via `LdapName`, and stores it as
 request attribute `mtls.client.cn` so the controller can echo `callerCn`.
