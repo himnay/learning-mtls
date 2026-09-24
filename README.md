@@ -39,6 +39,8 @@
 10. 🧷 [Authentication vs authorization](#authn-vs-authz)
 11. 🌱 [How Spring Boot wires TLS (SSL bundles → JSSE)](#spring-ssl-wiring)
 12. 🔑 [Secrets at rest — Jasypt `ENC(...)`](#secrets-at-rest)
+    - 12.1 [Is Jasypt symmetric? — Jasypt vs mTLS](#jasypt-symmetric)
+    - 12.2 [Decrypt a value locally](#jasypt-decrypt-locally)
 13. 🔍 [Inspecting and debugging](#inspecting-the-material)
 14. 🏭 [Production hardening checklist](#production-hardening)
 15. 📖 [Glossary](#glossary)
@@ -933,6 +935,52 @@ If `JASYPT_ENCRYPTOR_PASSWORD` is unset **or** wrong, startup aborts with the sa
 |---|---|
 | Password in git, CI logs, container images, config dumps | Attacker who also has the master key |
 | Cheap offline guessing (salt + iterations) | Heap dump of the running JVM |
+
+<a id="jasypt-symmetric"></a>
+### <span style="color:hsl(20,80%,58%)">12.1 Is Jasypt symmetric? — Jasypt vs mTLS</span>
+
+**Yes.** Jasypt's two-way mode is password-based encryption (PBE): the same master password
+encrypts and decrypts. In this project:
+
+1. A random 16-byte salt and PBKDF2-HMAC-SHA512 (1000 rounds) turn the master password into a
+   256-bit AES key.
+2. AES-256-CBC with a random 16-byte IV encrypts the DB password.
+3. What's stored is `ENC(Base64(salt ‖ IV ‖ ciphertext))`.
+
+Anyone with the master password can decrypt it, which is why it lives in an environment variable
+and not in git.
+
+Jasypt also has a one-way mode for hashing passwords. That isn't encryption at all, because it
+can't be reversed.
+
+Compared with the mTLS part of this project:
+
+| | Jasypt `ENC(...)` | mTLS |
+|---|---|---|
+| Keys | One shared secret (the master password) | A key pair per service: private key kept secret, public key in the certificate |
+| Crypto | Symmetric only (AES-256-CBC) | Asymmetric (RSA, ECDHE) to prove identity and agree a key, then symmetric (AES-256-GCM) for the data |
+| Who can decrypt | Anyone holding the master password | Only the two ends of that connection |
+
+<a id="jasypt-decrypt-locally"></a>
+### <span style="color:hsl(80,80%,50%)">12.2 Decrypt a value locally</span>
+
+```bash
+java -cp ~/.m2/repository/org/jasypt/jasypt/1.9.3/jasypt-1.9.3.jar \
+  org.jasypt.intf.cli.JasyptPBEStringDecryptionCLI \
+  input='NO0tYiQShpiblv/VUfihJX9MT1/xeEAuV5taQv2avcJV+qFzwnjquEvz7qIJYZYC' \
+  password=mtls-demo-master-key algorithm=PBEWITHHMACSHA512ANDAES_256 \
+  ivGeneratorClassName=org.jasypt.iv.RandomIvGenerator keyObtentionIterations=1000
+# ----OUTPUT----
+# mtls_s3cret
+```
+
+- Pass only the text inside `ENC(` … `)`.
+- Algorithm, IV generator and iterations must match the ones used to encrypt (`jasypt.encryptor.*`
+  in the producer's `application.yml`). Any mismatch fails with `EncryptionOperationNotPossibleException`.
+- The online Jasypt tools we tried (javainuse, rundevelrun, 8gwifi) can't decrypt this format:
+  they assume a different algorithm or don't read the random IV from the value. Decrypt locally,
+  and never paste a real master key into a website.
+- To encrypt a new value, see the [producer README](service-producer/README.md#encrypt-decrypt-a-value).
 
 <a id="inspecting-the-material"></a>
 ## <span style="color:hsl(193,80%,58%)">13. 🔍 Inspecting and debugging</span>
