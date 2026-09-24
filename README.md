@@ -601,15 +601,36 @@ flowchart LR
 
 **Same format, different contents, not interchangeable.** Both are password-protected PKCS#12
 files, made with the same tools (`openssl`, `keytool`) and loaded by Spring Boot the same way. What
-they hold is different. Measured on the consumer's pair:
+they hold is different.
+
+**Why they look identical in `keytool -list -v`: same fields, different information.**
+
+1. **Every certificate is an X.509 certificate.** `keytool -list -v` prints the same fields for any
+   certificate: Owner, Issuer, fingerprints, key size, extensions. The field names match; the values
+   under them differ.
+2. **Part of the data really is identical.** The keystore lists two certificates, and the second one
+   (`Certificate[2]`) is the CA. That's the same certificate as the truststore's only entry, with the
+   same SHA-256 (`FB:4D:48:…:9D:AD`).
+3. **In `application.yml`, the `keystore:` and `truststore:` blocks have the same fields**
+   (`location`, `password`, `type`). Spring Boot uses one class for both, so the block a file sits in
+   decides whether it acts as a keystore or a truststore.
+
+What differs, from the real listings of the consumer's pair:
 
 | | `service-consumer-keystore.p12` | `truststore.p12` |
 |---|---|---|
-| Entry type | `PrivateKeyEntry` (alias `service-consumer`) | `trustedCertEntry` (alias `mtls-demo-ca`) |
-| Private keys | 1 | 0 |
-| Certificates | leaf `CN=service-consumer` + CA `mTLS Demo Root CA` (the chain) | CA `mTLS Demo Root CA` only |
+| Entry type | `PrivateKeyEntry` | `trustedCertEntry` |
+| Alias | `service-consumer` | `mtls-demo-ca` |
+| Certificates | 2 (the chain) | 1 |
+| The service's own certificate (`CN=service-consumer`, not a CA, RSA 2048, valid for `service-consumer`, `localhost`, `127.0.0.1`) | ✅ present | ❌ absent |
+| CA certificate (`CN=mTLS Demo Root CA`, a CA, RSA 4096) | ✅ as the second certificate | ✅ as the only entry, **identical** |
+| Private key | ✅ 1, but `keytool -list` never prints it | ❌ none |
 | Size | 4452 B | 1750 B |
 | If it leaks | Anyone can impersonate the service | Nothing secret: public certificates only |
+
+The private key is the key difference, and `keytool -list` doesn't show it. To see it, run
+`openssl pkcs12 -info -noout -in <file> -passin pass:changeit`: the keystore shows one private-key
+entry (`Shrouded Keybag`), the truststore shows none.
 
 **Keystore → truststore: yes.** The keystore stores the full chain, CA certificate included
 (`generate-certs.sh` packs it with `-certfile ca.crt`). Extract the CA and import it as a trusted
