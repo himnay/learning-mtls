@@ -1,0 +1,37 @@
+name: CI
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # The parent chain (super-pom -> learning-bom) is not published to Maven Central,
+      # so check both out and install them into the runner's local repository first.
+      - uses: actions/checkout@v4
+        with:
+          repository: himnay/learning-bom
+          path: learning-bom
+      - uses: actions/checkout@v4
+        with:
+          repository: himnay/super-pom
+          path: super-pom
+      - uses: actions/checkout@v4
+        with:
+          path: learning-mtls
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: maven
+      - name: Install learning-bom
+        run: mvn -B -N install
+        working-directory: learning-bom
+      - name: Install super-pom
+        run: mvn -B -N install
+        working-directory: super-pom
+      - name: Build and test
+        run: mvn -B verify
+        working-directory: learning-mtls
