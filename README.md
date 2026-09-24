@@ -26,8 +26,9 @@
     - 7.6 [Revocation — CRL and OCSP](#revocation)
 8. 🗄️ [Keystores, truststores and file formats](#stores-and-formats)
     - 8.1 [Keystore vs truststore](#keystore-vs-truststore)
-    - 8.2 [PKCS#12 internals — how a `.p12` is protected](#pkcs12-internals)
-    - 8.3 [File formats — PEM, DER, PKCS#1/#8/#10/#12, JKS](#file-formats)
+    - 8.2 [Are they identical? Can one be built from the other?](#keystore-truststore-identical)
+    - 8.3 [PKCS#12 internals — how a `.p12` is protected](#pkcs12-internals)
+    - 8.4 [File formats — PEM, DER, PKCS#1/#8/#10/#12, JKS](#file-formats)
 9. 🔐 [TLS protocol](#tls-protocol)
     - 9.1 [TLS layers — handshake and record protocol](#tls-layers)
     - 9.2 [TLS 1.2 vs TLS 1.3](#tls12-vs-tls13)
@@ -595,8 +596,57 @@ flowchart LR
 | `service-consumer/…/ssl/service-consumer-keystore.p12` | keystore | PrivateKeyEntry | `service-consumer` |
 | `service-consumer/…/ssl/truststore.p12` | truststore | trustedCertEntry | `mtls-demo-ca` |
 
+<a id="keystore-truststore-identical"></a>
+### <span style="color:hsl(45,80%,50%)">8.2 Are they identical? Can one be built from the other?</span>
+
+**Same format, different contents, not interchangeable.** Both are password-protected PKCS#12
+files, made with the same tools (`openssl`, `keytool`) and loaded by Spring Boot the same way. What
+they hold is different. Measured on the consumer's pair:
+
+| | `service-consumer-keystore.p12` | `truststore.p12` |
+|---|---|---|
+| Entry type | `PrivateKeyEntry` (alias `service-consumer`) | `trustedCertEntry` (alias `mtls-demo-ca`) |
+| Private keys | 1 | 0 |
+| Certificates | leaf `CN=service-consumer` + CA `mTLS Demo Root CA` (the chain) | CA `mTLS Demo Root CA` only |
+| Size | 4452 B | 1750 B |
+| If it leaks | Anyone can impersonate the service | Nothing secret: public certificates only |
+
+**Keystore → truststore: yes.** The keystore stores the full chain, CA certificate included
+(`generate-certs.sh` packs it with `-certfile ca.crt`). Extract the CA and import it as a trusted
+entry:
+
+```bash
+openssl pkcs12 -in service-consumer/src/main/resources/ssl/service-consumer-keystore.p12 \
+  -passin pass:changeit -cacerts -nokeys -out ca-from-keystore.crt
+keytool -importcert -noprompt -alias mtls-demo-ca -file ca-from-keystore.crt \
+  -keystore my-truststore.p12 -storetype PKCS12 -storepass changeit
+```
+
+The result has the same CA fingerprint (`FB:4D:48:…:9D:AD`) as the committed `truststore.p12`. This
+only works because both services share one CA. A truststore must hold the **peer's** CA, and your
+keystore only contains your own.
+
+**Truststore → keystore: no.** A truststore holds only public certificates, and a keystore needs a
+private key. To make a new keystore you need a new key pair plus a certificate signed by the CA,
+which needs `ca.key`, and that's in no store. The generate scripts in section 4 do exactly that.
+
+**Can the keystore double as the truststore? No.** A Java TrustManager built from a keystore
+trusts only the *first* certificate of each key entry: the service's own leaf, not the CA behind
+it. Tested with the committed stores against the producer's server chain:
+
+| Store used as truststore | Trusts | Producer's chain |
+|---|---|---|
+| `truststore.p12` | `CN=mTLS Demo Root CA` | ✅ trusted |
+| `service-consumer-keystore.p12` | `CN=service-consumer` (own leaf only) | ❌ `PKIX path building failed … unable to find valid certification path` |
+| truststore rebuilt from the keystore (above) | `CN=mTLS Demo Root CA` | ✅ trusted |
+
+One PKCS#12 file *could* hold both a key entry and a separate trusted CA entry, but keeping them
+apart is the norm. The keystore is secret and per service. The truststore is public, and every
+service that trusts the same CA can use the same one: the consumer's and producer's truststores
+hold the same CA here.
+
 <a id="pkcs12-internals"></a>
-### <span style="color:hsl(80,80%,50%)">8.2 PKCS#12 internals — how a `.p12` is protected</span>
+### <span style="color:hsl(80,80%,50%)">8.3 PKCS#12 internals — how a `.p12` is protected</span>
 
 `openssl pkcs12 -info` on our files shows:
 
@@ -626,7 +676,7 @@ The store password (`changeit`) is therefore the only thing protecting the priva
 replace it for anything real.
 
 <a id="file-formats"></a>
-### <span style="color:hsl(300,70%,60%)">8.3 File formats — PEM, DER, PKCS#1/#8/#10/#12, JKS</span>
+### <span style="color:hsl(300,70%,60%)">8.4 File formats — PEM, DER, PKCS#1/#8/#10/#12, JKS</span>
 
 | Name | What it is | Where you meet it here |
 |---|---|---|
