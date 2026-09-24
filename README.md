@@ -544,6 +544,41 @@ Modern TLS clients **ignore CN for hostname checks** (RFC 6125) — SAN is manda
 `https://127.0.0.1:8443` works because of `IP:127.0.0.1`; calling `https://myhost:8443` would
 fail until `DNS:myhost` is added to the SAN and the cert reissued.
 
+#### Q&A — Does the certificate have a hostname?
+
+**Q: Does the certificate have a hostname?**
+
+**A:** Yes, the three service certificates do. The hostnames are in the **Subject Alternative Name
+(SAN)** field. The CA certificate has no SAN at all.
+
+| Certificate | Common Name (CN) | Hostnames it's valid for (SAN) |
+|---|---|---|
+| service-producer | `service-producer` | `service-producer`, `localhost`, `127.0.0.1` |
+| service-consumer | `service-consumer` | `service-consumer`, `localhost`, `127.0.0.1` |
+| service-unknown (test) | `service-unknown` | `service-unknown`, `localhost`, `127.0.0.1` |
+| mTLS Demo Root CA | `mTLS Demo Root CA` | none |
+
+The generate scripts set these with `subjectAltName=DNS:${name},DNS:localhost,IP:127.0.0.1`.
+
+- **Clients check the SAN.** The consumer, curl and Insomnia each confirm that the host they called
+  is listed in the producer's SAN. That's why both `https://localhost:8443` and
+  `https://127.0.0.1:8443` work. Calling `https://myhost:8443` fails with
+  `No name matching myhost found` until `myhost` is added to the SAN and the certificate is reissued.
+- **The CN isn't used as a hostname.** Modern clients ignore it for hostname checks. Here the CN only
+  identifies the caller: the producer's filter compares the client certificate's CN with its allow-list.
+- **The producer doesn't check hostnames on client certificates.** It checks the certificate chain
+  (in the TLS handshake) and then the CN.
+- **The CA has no hostname**, because it only signs certificates and never serves a site.
+- **`DNS:service-producer`** comes into play if the services call each other by that name, for
+  example on a Docker Compose or Kubernetes network.
+
+Check any certificate yourself:
+
+```bash
+openssl pkcs12 -in service-producer/src/main/resources/ssl/service-producer-keystore.p12 \
+  -passin pass:changeit -nokeys -clcerts | openssl x509 -noout -subject -ext subjectAltName
+```
+
 <a id="revocation"></a>
 ### <span style="color:hsl(260,60%,65%)">7.6 Revocation — CRL and OCSP</span>
 
