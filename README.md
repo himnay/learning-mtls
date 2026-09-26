@@ -96,7 +96,7 @@ flowchart LR
 
 ```
 org.springframework.boot:spring-boot-starter-parent:4.1.1
-└── com.org.llm:super-pom:1.1.2           (Java 25, learning-bom, build-info, git-commit-id, enforcer, Surefire/Failsafe, profiles)
+└── com.org.llm:super-pom:1.1.3           (Java 25, learning-bom, build-info, git-commit-id, enforcer, Surefire/Failsafe, profiles)
     └── com.org.mtls:learning-mtls        (this aggregator — shared deps: webmvc, actuator, Lombok, DevTools, webmvc-test;
         │                                  manages jasypt-spring-boot-starter 4.0.4)
         ├── service-producer
@@ -1546,7 +1546,7 @@ Reading the trace:
 |---|---|
 | JDK 25+ | `maven.compiler.release` is 25 (from super-pom) |
 | Maven 3.9+ | Enforced by super-pom |
-| `com.org.llm:super-pom:1.1.2` in `~/.m2` | Parent POM; not on Maven Central (section 3) |
+| `com.org.llm:super-pom:1.1.3` in `~/.m2` | Parent POM; not on Maven Central (section 3) |
 | Docker | PostgreSQL via `docker compose`; Testcontainers during the build's tests |
 | `curl`, OpenSSL, `keytool` (ships with the JDK) | Calling the services; PEM extraction; cert scripts |
 
