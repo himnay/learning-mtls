@@ -29,30 +29,40 @@
     - 8.2 [Are they identical? Can one be built from the other?](#keystore-truststore-identical)
     - 8.3 [PKCS#12 internals — how a `.p12` is protected](#pkcs12-internals)
     - 8.4 [File formats — PEM, DER, PKCS#1/#8/#10/#12, JKS](#file-formats)
-9. 🔐 [TLS protocol](#tls-protocol)
-    - 9.1 [TLS layers — handshake and record protocol](#tls-layers)
-    - 9.2 [TLS 1.2 vs TLS 1.3](#tls12-vs-tls13)
-    - 9.3 [Cipher suite anatomy](#cipher-suites)
-    - 9.4 [What this project actually negotiates](#negotiated-parameters)
-    - 9.5 [The mTLS handshake step by step](#the-mtls-handshake)
-    - 9.6 [TLS 1.3 key schedule](#key-schedule)
-    - 9.7 [TLS alerts and what they mean](#tls-alerts)
-10. 🧷 [Authentication vs authorization](#authn-vs-authz)
-11. 🌱 [How Spring Boot wires TLS (SSL bundles → JSSE)](#spring-ssl-wiring)
-12. 🔑 [Secrets at rest — Jasypt `ENC(...)`](#secrets-at-rest)
-    - 12.1 [Is Jasypt symmetric? — Jasypt vs mTLS](#jasypt-symmetric)
-    - 12.2 [Decrypt a value locally](#jasypt-decrypt-locally)
-13. 🔍 [Inspecting and debugging](#inspecting-the-material)
-14. 🏭 [Production hardening checklist](#production-hardening)
-15. 📖 [Glossary](#glossary)
-16. 🚀 [Quick start](#quick-start)
-17. 🔨 [Maven commands](#maven-commands)
-18. 🧪 [Insomnia collection](#insomnia)
-    - 18.1 [Import the collection](#insomnia-import)
-    - 18.2 [Add the CA certificate — before calling any API](#insomnia-ca-certificate)
-    - 18.3 [Add the client certificates — required for producer calls](#insomnia-client-certificates)
-    - 18.4 [Folders and expected results](#insomnia-folders)
-    - 18.5 [Troubleshooting](#insomnia-troubleshooting)
+9. 🌐 [TCP/IP model — how a TLS call travels](#tcp-ip-model)
+    - 9.1 [The four layers at a glance](#tcp-ip-layers)
+    - 9.2 [Application layer — HTTP inside TLS](#tcp-ip-application)
+    - 9.3 [Transport layer — TCP](#tcp-ip-transport)
+    - 9.4 [Internet layer — IP](#tcp-ip-internet)
+    - 9.5 [Network access layer — loopback, Ethernet, Wi-Fi](#tcp-ip-network-access)
+    - 9.6 [One mTLS call through all four layers](#tcp-ip-one-call)
+    - 9.7 [Encapsulation byte by byte](#tcp-ip-encapsulation)
+    - 9.8 [What each layer reveals, and how each one fails](#tcp-ip-debugging)
+10. 🔐 [TLS protocol](#tls-protocol)
+    - 10.1 [TLS layers — handshake and record protocol](#tls-layers)
+    - 10.2 [TLS 1.2 vs TLS 1.3](#tls12-vs-tls13)
+    - 10.3 [Cipher suite anatomy](#cipher-suites)
+    - 10.4 [What this project actually negotiates](#negotiated-parameters)
+    - 10.5 [The mTLS handshake step by step](#the-mtls-handshake)
+    - 10.6 [TLS 1.3 key schedule](#key-schedule)
+    - 10.7 [TLS alerts and what they mean](#tls-alerts)
+11. 🧷 [Authentication vs authorization](#authn-vs-authz)
+12. 🌱 [How Spring Boot wires TLS (SSL bundles → JSSE)](#spring-ssl-wiring)
+13. 🔑 [Secrets at rest — Jasypt `ENC(...)`](#secrets-at-rest)
+    - 13.1 [Is Jasypt symmetric? — Jasypt vs mTLS](#jasypt-symmetric)
+    - 13.2 [Decrypt a value locally](#jasypt-decrypt-locally)
+14. 🔍 [Inspecting and debugging](#inspecting-the-material)
+    - 14.1 [Server-side TLS handshake trace](#tls-handshake-trace)
+15. 🏭 [Production hardening checklist](#production-hardening)
+16. 📖 [Glossary](#glossary)
+17. 🚀 [Quick start](#quick-start)
+18. 🔨 [Maven commands](#maven-commands)
+19. 🧪 [Insomnia collection](#insomnia)
+    - 19.1 [Import the collection](#insomnia-import)
+    - 19.2 [Add the CA certificate — before calling any API](#insomnia-ca-certificate)
+    - 19.3 [Add the client certificates — required for producer calls](#insomnia-client-certificates)
+    - 19.4 [Folders and expected results](#insomnia-folders)
+    - 19.5 [Troubleshooting](#insomnia-troubleshooting)
 
 <a id="overview"></a>
 ## <span style="color:hsl(278,80%,58%)">1. 🎯 Overview</span>
@@ -370,7 +380,7 @@ A **KDF** turns some secret material into one or more properly-sized cryptograph
 
 | KDF | Input | Speed | Used by |
 |---|---|---|---|
-| **HKDF** (HMAC-based extract-and-expand, RFC 5869) | High-entropy secret (ECDHE output) | Fast — input is already strong | TLS 1.3 key schedule (9.6) |
+| **HKDF** (HMAC-based extract-and-expand, RFC 5869) | High-entropy secret (ECDHE output) | Fast — input is already strong | TLS 1.3 key schedule (10.6) |
 | **PBKDF2** (PKCS#5 v2, RFC 8018) | Low-entropy **password** + salt | **Deliberately slow** (iterations) to resist guessing | PKCS#12 stores (2048–10000 iters), Jasypt (1000 iters) |
 
 ```mermaid
@@ -446,7 +456,7 @@ flowchart TB
 Trust is **transitive through signatures**: the producer never saw `service-consumer.crt`
 before, but it trusts the root, and the root's signature on the consumer cert verifies — so the
 consumer cert is trusted. `service-unknown` is equally trusted at the TLS layer; only the CN
-allow-list (section 10) stops it. (The fingerprint above belongs to the committed demo CA; it
+allow-list (section 11) stops it. (The fingerprint above belongs to the committed demo CA; it
 changes whenever the CA is regenerated.)
 
 <a id="csr-flow"></a>
@@ -727,7 +737,7 @@ flowchart LR
     PW --> KDF2["PBKDF2 (MAC key)"] --> MAC["HMAC-SHA256 over contents<br/>→ wrong password / tamper detected"]
 ```
 
-The same **PBES2 = PBKDF2 + AES-CBC** pattern protects Jasypt `ENC(...)` values (section 12).
+The same **PBES2 = PBKDF2 + AES-CBC** pattern protects Jasypt `ENC(...)` values (section 13).
 The store password (`changeit`) is therefore the only thing protecting the private key at rest —
 replace it for anything real.
 
@@ -757,11 +767,299 @@ flowchart LR
     CRT <-- "openssl x509 -outform DER/PEM" --> DER["service.der<br/>DER"]
 ```
 
+<a id="tcp-ip-model"></a>
+## <span style="color:hsl(170,75%,48%)">9. 🌐 TCP/IP model — how a TLS call travels</span>
+
+Every call in this project is HTTP inside TLS inside TCP inside IP. TLS protects only what it
+wraps: the layers below it still carry addresses, ports and sizes in the clear. This section
+follows one real mTLS call (`GET /api/v1/greetings/himansu?lang=fr` to the producer) down the
+client's stack and back up the server's. The numbers come from a live run: curl 8.18 (OpenSSL 3.5,
+the same TLS stack as Insomnia) against the producer on JDK 25, traced as in
+[14.1](#tls-handshake-trace).
+
+<p align="center">
+  <img src="docs/images/tcp-ip-model.png" alt="TCP/IP model infographic: the four layers, how data travels from a PC to a server, encapsulation on the sender and decapsulation on the receiver">
+  <br><sub>Infographic: <i>Networking with Israr</i></sub>
+</p>
+
+<a id="tcp-ip-layers"></a>
+### <span style="color:hsl(20,80%,58%)">9.1 The four layers at a glance</span>
+
+Each layer does one job and talks only to the layers directly above and below it. On the way
+out, each layer wraps what it gets from above in its own header (**encapsulation**). On the way
+in, each layer removes its header and passes the rest up (**decapsulation**).
+
+| # | Layer | Job | Unit | Addressed by | In this call | Handled by |
+|---|---|---|---|---|---|---|
+| 4 | Application | What is said, and keeping it secret | HTTP message in TLS records | host name + path | HTTP/1.1 inside TLS 1.3 | The JVM: Spring MVC, Tomcat, JSSE `SSLEngine` |
+| 3 | Transport | Reliable, ordered bytes between two programs | Segment | Port | TCP, client port `43364` → `8443` | Linux kernel (TCP); Tomcat `NioEndpoint` owns the socket |
+| 2 | Internet | Delivering packets between hosts | Packet | IP address | IPv6 `::1` → `::1` | Linux kernel (routing) |
+| 1 | Network access | Moving frames across one link | Frame | MAC address | Loopback `lo` (one machine) | Kernel driver; network card and switch between machines |
+
+TLS has no layer of its own. It runs at the bottom of the application layer: to TCP and the
+routers it is just application data on port 8443, and to HTTP it is a secure pipe. The
+seven-layer OSI model — a reference model, not what the software implements — splits the same
+work more finely, and TLS fits it only roughly:
+
+| OSI layer | TCP/IP layer | In this call |
+|---|---|---|
+| 7 Application | 4 Application | HTTP request and JSON response |
+| 6 Presentation | 4 Application | TLS record encryption (AES-256-GCM), X.509 certificates |
+| 5 Session | 4 Application | TLS handshake, session tickets |
+| 4 Transport | 3 Transport | TCP |
+| 3 Network | 2 Internet | IPv6 (or IPv4) |
+| 2 Data link | 1 Network access | Loopback here; Ethernet or Wi-Fi between machines |
+| 1 Physical | 1 Network access | None on loopback; cable or radio between machines |
+
+<a id="tcp-ip-application"></a>
+### <span style="color:hsl(80,80%,50%)">9.2 Application layer — HTTP inside TLS</span>
+
+The only layer the services' code sees. Two protocols share it:
+
+- **HTTP/1.1** carries the request and the response. Curl offered HTTP/2 through ALPN
+  (`ALPN: curl offers h2,http/1.1`). The producer has HTTP/2 off, so it ignored the offer and the
+  call used HTTP/1.1.
+- **TLS 1.3** first runs the handshake, which agrees on keys and proves identities
+  ([10.5](#the-mtls-handshake)). Then its **record protocol** encrypts and authenticates every byte
+  of HTTP.
+
+What TLS does to curl's 110-byte request:
+
+```
+GET /api/v1/greetings/himansu?lang=fr HTTP/1.1\r\n   48 bytes
+Host: localhost:8443\r\n                             22
+User-Agent: curl/8.18.0\r\n                          25
+Accept: */*\r\n                                      13
+\r\n                                                  2
+                                                    ───
+                                                    110 bytes of HTTP
+```
+
+| Step | Bytes added | Total |
+|---|---|---|
+| HTTP request | — | 110 |
+| Inner content type: the record's real type (`application_data`), hidden inside the encryption | +1 | 111 |
+| AES-256-GCM: the ciphertext is as long as the plaintext, plus a 16-byte authentication tag | +16 | 127, shown in the trace as `READ: TLSv1.2 application_data, length = 127` |
+| Record header: type, legacy version `0x0303`, length | +5 | **132 bytes handed to TCP** |
+
+The same +17 explains every encrypted record in the trace. The client's `Finished` is 52 bytes
+(4-byte message header + 48-byte HMAC-SHA384) and arrives as a 69-byte record. Its
+`CertificateVerify` is 264 bytes (header, signature scheme, length, 256-byte RSA-2048 signature)
+and arrives as 281.
+
+What TLS changes, and what it doesn't:
+
+- **TLS checks the name in the URL, not the IP address the packets use.**
+  `https://localhost:8443` travels over `::1` but is checked against the SAN `DNS:localhost`.
+  `https://127.0.0.1:8443` is checked against `IP:127.0.0.1`. `https://[::1]:8443` reaches the
+  same socket but fails with `curl: (60) SSL: no alternative certificate subject name matches
+  target ipv6 address '::1'`, because the certificate doesn't list `::1`
+  ([7.5](#hostname-verification)).
+- **SNI goes out in clear.** The ClientHello's `server_name` extension names the host the client
+  wants. Curl sends it for `localhost` but never for an IP address, so the `127.0.0.1` calls carry
+  none. The producer has one certificate and ignores it (`no server name matchers` in the trace).
+- **The ClientHello is 1,564 bytes** mostly because OpenSSL 3.5 also sends a post-quantum hybrid
+  key share (`X25519MLKEM768`, group 4588). JDK 25 doesn't support it, so the producer picks
+  `x25519`.
+- **After the ServerHello, records are disguised.** Every encrypted record says
+  `application_data` and TLS 1.2 in its header; the real type is inside. That's why the trace
+  shows the client's certificate as `READ: TLSv1.2 application_data, length = 2576`.
+- **TLS is per connection, not end to end.** Insomnia → consumer and consumer → producer are two
+  TCP connections with two TLS sessions. The consumer decrypts the first, handles the request in
+  plaintext, and encrypts again for the second.
+
+Inside the JVM, Tomcat's `SecureNioChannel` passes socket bytes to JSSE's `SSLEngine` (`unwrap`
+decrypts, `wrap` encrypts). `Http11Processor` parses the decrypted HTTP, and Spring MVC calls the
+controller. For the consumer's outbound call, the JDK `HttpClient` behind Feign plays the client
+with its own `SSLEngine`.
+
+<a id="tcp-ip-transport"></a>
+### <span style="color:hsl(300,70%,60%)">9.3 Transport layer — TCP</span>
+
+TCP turns packets into a **reliable, ordered byte stream** between two programs. TLS depends on
+that: one lost or reordered byte breaks a record's authentication tag. That's why TLS runs on TCP;
+datagram protocols use DTLS or QUIC instead.
+
+- **Ports pick the program.** A connection is identified by the source and destination address
+  and port. Curl reports this one as
+  `Established connection to localhost (::1 port 8443) from ::1 port 43364`. Port 43364 is an
+  ephemeral port picked by the client's kernel. Port 8443 is Tomcat's listening socket, which
+  `ss -ltn` shows as `*:8443`: one socket for both IPv4 and IPv6.
+- **The TCP handshake comes first.** The two kernels exchange `SYN`, `SYN-ACK` and `ACK` before
+  any TLS byte is sent. Then Tomcat's threads take over: `https-jsse-nio-8443-Acceptor` accepts
+  the connection, `…-Poller` waits until data arrives, and the `…-exec-N` workers run the TLS
+  handshake and the request.
+- **TCP has no message boundaries.** It moves bytes, not TLS records, so every record starts with
+  a 5-byte header that holds its length (`curl -v` prints them as `[5 bytes data]`). One segment
+  can carry several records, and one record can span several segments.
+- **Segment size.** A segment's payload is capped by the MSS: the link's MTU minus the IP and TCP
+  headers. On loopback (MTU 65536) every record here fits in one segment. Over Ethernet (MTU 1500,
+  so under 1,460 bytes per segment) the producer's encrypted handshake flight needs three
+  segments: 3,030 bytes of EncryptedExtensions, CertificateRequest, Certificate, CertificateVerify
+  and Finished.
+- **Round trips.** On a new connection the first response costs three: the TCP handshake, the
+  TLS 1.3 handshake, then the HTTP request and response. TLS 1.2 needs one more. A reused
+  (keep-alive) connection skips the first two.
+- **Closing.** Each side sends a TLS `close_notify` alert (the 19-byte record at the end of the
+  trace), then TCP closes the connection with `FIN` and `ACK`.
+
+<a id="tcp-ip-internet"></a>
+### <span style="color:hsl(165,80%,45%)">9.4 Internet layer — IP</span>
+
+IP delivers packets from one host address to another, router by router. It knows nothing about
+ports, TLS or HTTP.
+
+- **Addresses.** Curl resolved `localhost` to `::1` and `127.0.0.1` and tried IPv6 first
+  (`Trying [::1]:8443...`). So the producer sees the client as `0:0:0:0:0:0:0:1`, for example in
+  Tomcat's log of a failed handshake. Insomnia's *mTLS as service-unknown* folder calls
+  `127.0.0.1:8443`, which is IPv4.
+- **Routing.** Both addresses are local: `ip route get 127.0.0.1` answers
+  `local 127.0.0.1 dev lo`, so the packets never leave the kernel. Between machines, the sender
+  hands each packet to its default gateway, and every router forwards it by destination address
+  and lowers its TTL (IPv6: hop limit) by one.
+- **Header.** IPv6 adds 40 bytes (IPv4: 20) holding the source and destination address and the
+  type of the payload (6 = TCP). The 132-byte TLS record plus a 32-byte TCP header becomes a
+  204-byte IPv6 packet.
+- **TLS doesn't trust IP.** Addresses can be spoofed and routes hijacked, which is exactly the
+  threat TLS answers: whoever receives the packets still has to prove it holds the certificate's
+  private key (`CertificateVerify`). With mTLS the client has to prove it too, and the producer
+  authorizes by certificate CN, never by source address.
+- **Not encrypted.** Source and destination addresses stay readable for every router on the path.
+
+<a id="tcp-ip-network-access"></a>
+### <span style="color:hsl(45,80%,50%)">9.5 Network access layer — loopback, Ethernet, Wi-Fi</span>
+
+This layer moves frames across a single link, physical or virtual, between MAC addresses.
+
+- **Here: loopback.** Client and services run on one machine, so frames go through the kernel's
+  loopback device `lo` (MTU 65536). No network card, no cable, no address lookup.
+- **Between machines**, for example consumer and producer on two hosts: the kernel looks up the
+  MAC address of the next hop (ARP for IPv4, Neighbor Discovery for IPv6), wraps the packet in an
+  Ethernet frame (14-byte header, 4-byte checksum, MTU 1500) or a Wi-Fi frame, and the network
+  card sends it. Switches forward frames by MAC address.
+- **Containers** use the same layers, virtually: a Docker container's traffic crosses a virtual
+  Ethernet pair (`veth`) and a Linux bridge.
+- **Local only.** MAC addresses are replaced at every router, so they never cross the internet.
+  Wi-Fi encryption (WPA2, WPA3) protects only the hop between device and access point; TLS
+  protects the whole connection.
+
+<a id="tcp-ip-one-call"></a>
+### <span style="color:hsl(260,60%,65%)">9.6 One mTLS call through all four layers</span>
+
+`{…}` marks encrypted messages. Sizes are plaintext bytes from the run.
+
+```mermaid
+sequenceDiagram
+    participant C as curl / Insomnia
+    participant P as service-producer :8443
+    rect rgba(100,150,255,0.15)
+    Note over C,P: 3 · Transport — TCP handshake (kernels)
+    C->>P: SYN
+    P->>C: SYN-ACK
+    C->>P: ACK
+    end
+    rect rgba(255,170,60,0.15)
+    Note over C,P: 4 · Application — TLS 1.3 handshake
+    C->>P: ClientHello (1,564 B · SNI localhost · key shares)
+    P->>C: ServerHello (122 B)
+    P->>C: {EncryptedExtensions, CertificateRequest, Certificate, CertificateVerify, Finished} (3,030 B)
+    C->>P: {Certificate, CertificateVerify, Finished} (2,559 + 264 + 52 B)
+    P->>C: {NewSessionTicket} (2,480 B)
+    end
+    rect rgba(80,200,120,0.15)
+    Note over C,P: 4 · Application — HTTP inside TLS
+    C->>P: {GET /api/v1/greetings/himansu?lang=fr} (110 B)
+    P->>C: {HTTP/1.1 200 + JSON} (260 B)
+    end
+    rect rgba(160,160,160,0.15)
+    Note over C,P: Close — TLS first, then TCP (ACKs omitted)
+    C->>P: {close_notify}
+    P->>C: {close_notify}
+    C->>P: FIN
+    P->>C: FIN
+    end
+```
+
+`curl -v` prints the layers in order (trimmed; `>` is sent, `<` is received):
+
+```
+* Host localhost:8443 was resolved.
+* IPv6: ::1                                                ← 2 Internet: candidate addresses
+* IPv4: 127.0.0.1
+*   Trying [::1]:8443...                                   ← 3 Transport: TCP connect over IPv6
+* ALPN: curl offers h2,http/1.1                            ← 4 Application: TLS starts
+* TLSv1.3 (OUT), TLS handshake, Client hello (1):
+* TLSv1.3 (IN), TLS handshake, Server hello (2):
+* TLSv1.3 (IN), TLS handshake, Request CERT (13):          ← the producer asks for a client cert
+* TLSv1.3 (OUT), TLS handshake, Certificate (11):
+} [2559 bytes data]                                        ← our client certificate chain
+* SSL connection using TLSv1.3 / TLS_AES_256_GCM_SHA384 / x25519 / RSASSA-PSS
+* ALPN: server did not agree on a protocol. Uses default.  ← so HTTP/1.1
+*   subjectAltName: "localhost" matches cert's "localhost" ← host name checked against the SAN
+* Established connection to localhost (::1 port 8443) from ::1 port 43364
+> GET /api/v1/greetings/himansu?lang=fr HTTP/1.1           ← 4 Application: HTTP, inside TLS
+< HTTP/1.1 200
+```
+
+Curl prints the connection's addresses and ports only after the handshake, but the TCP
+connection has been open since `Trying`. The consumer's call to the producer goes through the
+same four layers, with the consumer's JDK `HttpClient` in curl's place.
+
+<a id="tcp-ip-encapsulation"></a>
+### <span style="color:hsl(0,70%,60%)">9.7 Encapsulation byte by byte</span>
+
+The HTTP request from 9.6 on its way down curl's stack and back up the producer's:
+
+```mermaid
+flowchart LR
+    subgraph CL["curl / Insomnia — encapsulation"]
+        direction TB
+        A4["4 · Application<br/>HTTP 110 B → TLS record 132 B"] --> A3["3 · Transport<br/>+ TCP header 32 B → segment 164 B"]
+        A3 --> A2["2 · Internet<br/>+ IPv6 header 40 B → packet 204 B"]
+        A2 --> A1["1 · Network access<br/>loopback frame"]
+    end
+    subgraph PR["service-producer — decapsulation"]
+        direction BT
+        B1["1 · Network access<br/>frame removed"] --> B2["2 · Internet<br/>IPv6 header removed"]
+        B2 --> B3["3 · Transport<br/>TCP header removed → 132 B to Tomcat's socket"]
+        B3 --> B4["4 · Application<br/>JSSE checks the tag, decrypts → 110 B of HTTP → Spring MVC"]
+    end
+    CL -- "lo" --> PR
+```
+
+| Layer | Adds | What the header holds (this call) | Size so far |
+|---|---|---|---|
+| HTTP | — | `GET /api/v1/greetings/himansu?lang=fr HTTP/1.1` and three headers | 110 B |
+| TLS | 1-byte inner type, 16-byte GCM tag, 5-byte record header | Type `application_data`, version `0x0303`, length 127. Everything else is ciphertext | 132 B |
+| TCP | 20-byte header + 12 bytes of options (Linux adds timestamps) | Ports `43364 → 8443`, sequence and acknowledgment numbers, flags, window | 164 B |
+| IP | 40-byte IPv6 header (IPv4: 20) | `::1 → ::1`, next header 6 (TCP), hop limit | 204 B |
+| Network access | Loopback: never leaves the kernel. Ethernet: 14-byte header + 4-byte checksum | MAC addresses, EtherType `0x86DD` (IPv6) | 222 B on Ethernet |
+
+Only 110 of the 222 bytes on an Ethernet wire are the request itself, and an observer can read
+none of those 110.
+
+<a id="tcp-ip-debugging"></a>
+### <span style="color:hsl(193,80%,58%)">9.8 What each layer reveals, and how each one fails</span>
+
+| Layer | An on-path observer sees | Typical failure → error | Look with |
+|---|---|---|---|
+| 4 Application — HTTP | Nothing: method, path, headers and body are encrypted | `403` (CN not allow-listed), `404`, `502` from the consumer | `curl -v` (`>` and `<` lines), service logs |
+| 4 Application — TLS | The whole ClientHello (SNI, offered cipher suites, ALPN), then only record types and sizes. TLS 1.2 would also show both certificates | Untrusted server certificate or name not in the SAN → curl `60`; no client certificate → alert `certificate_required`, curl `56`; wrong `.p12` passphrase → curl `58` | `openssl s_client` ([14](#inspecting-the-material)), `-Ptls-debug` ([14.1](#tls-handshake-trace)), Insomnia's Timeline ([19.5](#insomnia-troubleshooting)) |
+| 3 Transport — TCP | Ports, sequence numbers, timing, sizes | Nothing listening on the port: the kernel answers `SYN` with `RST`, so `Connection refused` (curl `7`). A firewall drops the `SYN`: timeout (curl `28`) | `ss -ltnp 'sport = :8443'`, `ss -tn` |
+| 2 Internet — IP | Source and destination addresses | `Network is unreachable`, `No route to host` (curl `7`) | `ip addr`, `ip route get 127.0.0.1`, `ping` |
+| 1 Network access | MAC addresses, on the local link only | Link down, Wi-Fi dropped; only between machines | `ip link`, `ethtool` |
+
+To see all four layers of real packets at once, capture the loopback interface with
+`sudo tcpdump -i lo -nn 'tcp port 8443'` or Wireshark. The IP and TCP headers are in clear,
+followed by TLS records whose contents stop being readable after the ServerHello.
+
 <a id="tls-protocol"></a>
-## <span style="color:hsl(200,80%,55%)">9. 🔐 TLS protocol</span>
+## <span style="color:hsl(200,80%,55%)">10. 🔐 TLS protocol</span>
+
+TLS sits between HTTP and TCP ([section 9](#tcp-ip-model)). This section covers what happens inside it.
 
 <a id="tls-layers"></a>
-### <span style="color:hsl(20,80%,58%)">9.1 TLS layers — handshake and record protocol</span>
+### <span style="color:hsl(20,80%,58%)">10.1 TLS layers — handshake and record protocol</span>
 
 ```mermaid
 flowchart TB
@@ -782,7 +1080,7 @@ flowchart TB
 - **HTTPS** is simply HTTP carried over TLS.
 
 <a id="tls12-vs-tls13"></a>
-### <span style="color:hsl(80,80%,50%)">9.2 TLS 1.2 vs TLS 1.3</span>
+### <span style="color:hsl(80,80%,50%)">10.2 TLS 1.2 vs TLS 1.3</span>
 
 Both are enabled (`enabled-protocols: TLSv1.3,TLSv1.2`); TLS 1.3 is preferred and is what the
 services negotiate. TLS 1.1 and below are refused.
@@ -798,7 +1096,7 @@ services negotiate. TLS 1.1 and below are refused.
 | Suite naming | `ECDHE-RSA-AES256-GCM-SHA384` (kx + auth + cipher + hash) | `TLS_AES_256_GCM_SHA384` (cipher + hash only; kx/auth negotiated separately) |
 
 <a id="cipher-suites"></a>
-### <span style="color:hsl(300,70%,60%)">9.3 Cipher suite anatomy</span>
+### <span style="color:hsl(300,70%,60%)">10.3 Cipher suite anatomy</span>
 
 ```
 TLS 1.3:   TLS _ AES_256_GCM _ SHA384
@@ -815,7 +1113,7 @@ TLS 1.2:   ECDHE - RSA - AES256-GCM - SHA384
 ```
 
 <a id="negotiated-parameters"></a>
-### <span style="color:hsl(165,80%,45%)">9.4 What this project actually negotiates</span>
+### <span style="color:hsl(165,80%,45%)">10.4 What this project actually negotiates</span>
 
 Verified with `openssl s_client` (OpenSSL 3.5) and `-Djavax.net.debug=ssl:handshake` on the consumer (JDK 25 and JDK 26 give the same results):
 
@@ -831,7 +1129,7 @@ Verified with `openssl s_client` (OpenSSL 3.5) and `-Djavax.net.debug=ssl:handsh
 | TLS 1.1 attempt | — | refused — alert 70 `protocol_version` | — |
 
 <a id="the-mtls-handshake"></a>
-### <span style="color:hsl(45,80%,50%)">9.5 The mTLS handshake step by step (TLS 1.3)</span>
+### <span style="color:hsl(45,80%,50%)">10.5 The mTLS handshake step by step (TLS 1.3)</span>
 
 ```mermaid
 sequenceDiagram
@@ -869,7 +1167,7 @@ sequenceDiagram
 | 11–12 | Application data | HTTP inside AES-256-GCM records |
 
 <a id="key-schedule"></a>
-### <span style="color:hsl(260,60%,65%)">9.6 TLS 1.3 key schedule</span>
+### <span style="color:hsl(260,60%,65%)">10.6 TLS 1.3 key schedule</span>
 
 ```mermaid
 flowchart TB
@@ -894,7 +1192,7 @@ Every secret is mixed with the **transcript hash**, so keys are bound to the exa
 that produced them — altering any message changes all keys.
 
 <a id="tls-alerts"></a>
-### <span style="color:hsl(0,70%,60%)">9.7 TLS alerts and what they mean</span>
+### <span style="color:hsl(0,70%,60%)">10.7 TLS alerts and what they mean</span>
 
 | Situation | Alert | What you see |
 |---|---|---|
@@ -908,7 +1206,7 @@ that produced them — altering any message changes all keys.
 | CA-trusted cert, CN not allow-listed | *(no alert — TLS succeeded)* | HTTP `403` |
 
 <a id="authn-vs-authz"></a>
-## <span style="color:hsl(120,60%,45%)">10. 🧷 Authentication vs authorization</span>
+## <span style="color:hsl(120,60%,45%)">11. 🧷 Authentication vs authorization</span>
 
 mTLS answers **"who are you?"** (authentication). It does **not** answer **"may you do this?"**
 (authorization). Any cert signed by the CA passes TLS, so the producer adds a second gate.
@@ -941,7 +1239,7 @@ sequenceDiagram
 | Authorization (HTTP) | CN extracted via `LdapName` from `jakarta.servlet.request.X509Certificate` | `mtls.allowed-client-cns` | `403` |
 
 <a id="spring-ssl-wiring"></a>
-## <span style="color:hsl(30,80%,55%)">11. 🌱 How Spring Boot wires TLS (SSL bundles → JSSE)</span>
+## <span style="color:hsl(30,80%,55%)">12. 🌱 How Spring Boot wires TLS (SSL bundles → JSSE)</span>
 
 Java's TLS implementation is **JSSE** (`javax.net.ssl`). Spring Boot's **SSL bundles** load the
 stores once and hand a ready `SSLContext` to both the embedded server and HTTP clients.
@@ -993,7 +1291,7 @@ consumer supplies its own `feign.Client` ([consumer README](service-consumer/REA
 | `server.ssl.client-auth` | `none` / `want` (ask, don't require) / **`need`** (require) |
 
 <a id="secrets-at-rest"></a>
-## <span style="color:hsl(240,80%,65%)">12. 🔑 Secrets at rest — Jasypt `ENC(...)`</span>
+## <span style="color:hsl(240,80%,65%)">13. 🔑 Secrets at rest — Jasypt `ENC(...)`</span>
 
 The producer's DB password is stored as `ENC(<base64>)` in `application.yml` and decrypted in
 memory at startup with a master key from `JASYPT_ENCRYPTOR_PASSWORD`. Algorithm
@@ -1043,7 +1341,7 @@ If `JASYPT_ENCRYPTOR_PASSWORD` is unset **or** wrong, startup aborts with the sa
 | Cheap offline guessing (salt + iterations) | Heap dump of the running JVM |
 
 <a id="jasypt-symmetric"></a>
-### <span style="color:hsl(20,80%,58%)">12.1 Is Jasypt symmetric? — Jasypt vs mTLS</span>
+### <span style="color:hsl(20,80%,58%)">13.1 Is Jasypt symmetric? — Jasypt vs mTLS</span>
 
 **Yes.** Jasypt's two-way mode is password-based encryption (PBE): the same master password
 encrypts and decrypts. In this project:
@@ -1068,7 +1366,7 @@ Compared with the mTLS part of this project:
 | Who can decrypt | Anyone holding the master password | Only the two ends of that connection |
 
 <a id="jasypt-decrypt-locally"></a>
-### <span style="color:hsl(80,80%,50%)">12.2 Decrypt a value locally</span>
+### <span style="color:hsl(80,80%,50%)">13.2 Decrypt a value locally</span>
 
 ```bash
 java -cp ~/.m2/repository/org/jasypt/jasypt/1.9.3/jasypt-1.9.3.jar \
@@ -1089,7 +1387,7 @@ java -cp ~/.m2/repository/org/jasypt/jasypt/1.9.3/jasypt-1.9.3.jar \
 - To encrypt a new value, see the [producer README](service-producer/README.md#encrypt-decrypt-a-value).
 
 <a id="inspecting-the-material"></a>
-## <span style="color:hsl(193,80%,58%)">13. 🔍 Inspecting and debugging</span>
+## <span style="color:hsl(193,80%,58%)">14. 🔍 Inspecting and debugging</span>
 
 ```bash
 # certificate details (subject, issuer, SAN, EKU, validity)
@@ -1118,8 +1416,77 @@ openssl s_client -tls1_1 -cipher 'DEFAULT@SECLEVEL=0' -connect localhost:8443 </
 java -Djavax.net.debug=ssl:handshake -jar service-consumer/target/service-consumer-0.0.1-SNAPSHOT.jar
 ```
 
+<a id="tls-handshake-trace"></a>
+### <span style="color:hsl(210,80%,60%)">14.1 Server-side TLS handshake trace</span>
+
+Insomnia's **Timeline** shows the client's side of a handshake ([19.5](#insomnia-troubleshooting)).
+For the server's side, turn on the JDK's TLS trace. Tomcat doesn't parse handshake messages: its
+connector hands the bytes to the JDK's JSSE `SSLEngine`. Tomcat's own loggers report at most that
+a handshake failed (first row of the table below). The messages themselves come from JSSE, and its
+switch is the JVM system property `javax.net.debug`. The JDK reads it once at startup, so it has
+no effect in `application.yml`, and changing it needs a restart.
+
+```bash
+# Maven: the tls-debug profile (root pom) adds -Djavax.net.debug=ssl:handshake to the app's JVM
+JASYPT_ENCRYPTOR_PASSWORD=mtls-demo-master-key mvn -pl service-producer spring-boot:run -Ptls-debug
+mvn -pl service-consumer spring-boot:run -Ptls-debug
+
+# Jar: the trace goes to stderr, so it can be written to its own file
+JASYPT_ENCRYPTOR_PASSWORD=mtls-demo-master-key java -Djavax.net.debug=ssl:handshake \
+  -jar service-producer/target/service-producer-0.0.1-SNAPSHOT.jar 2> handshake.log
+```
+
+In an IDE, add `-Djavax.net.debug=ssl:handshake` to the run configuration's VM options.
+
+| Want | Set | Output |
+|---|---|---|
+| Failed handshakes only | `logging.level.org.apache.tomcat.util.net.NioEndpoint.handshake: debug` (a normal logging level; works in `application.yml`) | One entry per failed handshake: client IP and port, and the `SSLHandshakeException` |
+| Short timeline | JVM `-Djavax.net.debug` (empty value) and `logging.level.javax.net.ssl: debug` | One line per handshake step, in the normal log format. The message contents are dropped |
+| Full trace (`-Ptls-debug`) | JVM `-Djavax.net.debug=ssl:handshake` | Every handshake message with all its fields, on stderr (not through Logback). About 850 lines per new connection, plus about 5,000 at startup |
+
+A successful mTLS call to the producer (from Insomnia or curl), reduced to the message headlines
+(JDK 25):
+
+```
+Consuming ClientHello handshake message             ← cipher suites and groups the client offers
+Negotiated protocol version: TLSv1.3
+use cipher suite TLS_AES_256_GCM_SHA384
+Produced ServerHello handshake message              ← key_share: x25519
+Produced EncryptedExtensions message
+Produced CertificateRequest message                 ← client-auth: need
+Produced server Certificate message
+Produced server CertificateVerify handshake message
+Produced server Finished handshake message
+Consuming client Certificate handshake message      ← "subject": "O=com.org, CN=service-consumer"
+Found trusted certificate
+Consuming CertificateVerify handshake message
+Consuming client Finished handshake message
+Produced NewSessionTicket stateless post-handshake message
+```
+
+Without a client certificate, the client's `Certificate` message is empty and the producer aborts
+the handshake:
+
+```
+Consuming client Certificate handshake message      ← "certificate_list": [ ]
+Fatal (CERTIFICATE_REQUIRED): Empty client certificate chain
+```
+
+Reading the trace:
+
+- `Consuming ClientHello` means this JVM is the server, so the call came in from a client such as
+  Insomnia. On the consumer, `Produced ClientHello` is its own call to the producer.
+- One handshake moves across several `https-jsse-nio-…-exec-N` threads. Follow the message order,
+  not the thread name.
+- `WARNING … Unsupported signature scheme` and `Ignore impact of unsupported extension` are
+  harmless. The client offers algorithms that JSSE skips.
+- A trace appears only for a new TLS connection. A request sent on a reused connection has no
+  handshake.
+- Use `ssl:handshake`, not `all`. `-Djavax.net.debug=all` also dumps decrypted records, so HTTP
+  headers and bodies end up in the log.
+
 <a id="production-hardening"></a>
-## <span style="color:hsl(0,75%,60%)">14. 🏭 Production hardening checklist</span>
+## <span style="color:hsl(0,75%,60%)">15. 🏭 Production hardening checklist</span>
 
 | Area | Demo | Production |
 |---|---|---|
@@ -1134,7 +1501,7 @@ java -Djavax.net.debug=ssl:handshake -jar service-consumer/target/service-consum
 | Inbound to consumer | One-way TLS | mTLS or OAuth2 at the edge |
 
 <a id="glossary"></a>
-## <span style="color:hsl(260,60%,65%)">15. 📖 Glossary</span>
+## <span style="color:hsl(260,60%,65%)">16. 📖 Glossary</span>
 
 | Term | Meaning |
 |---|---|
@@ -1173,7 +1540,7 @@ java -Djavax.net.debug=ssl:handshake -jar service-consumer/target/service-consum
 | **X.509** | Certificate format standard |
 
 <a id="quick-start"></a>
-## <span style="color:hsl(120,60%,45%)">16. 🚀 Quick start</span>
+## <span style="color:hsl(120,60%,45%)">17. 🚀 Quick start</span>
 
 | Prerequisite | Why |
 |---|---|
@@ -1227,10 +1594,10 @@ docker compose down
 - More calls to try (`403`, `404`, handshake failure) are in the
   [producer README](service-producer/README.md#running-locally), or in the
   [Insomnia collection](#insomnia). In Insomnia, add `insomnia-certs/ca.crt` as the CA certificate
-  **before** sending anything ([18.2](#insomnia-ca-certificate)).
+  **before** sending anything ([19.2](#insomnia-ca-certificate)).
 
 <a id="maven-commands"></a>
-## <span style="color:hsl(30,80%,55%)">17. 🔨 Maven commands</span>
+## <span style="color:hsl(30,80%,55%)">18. 🔨 Maven commands</span>
 
 | Command | What it does |
 |---|---|
@@ -1238,6 +1605,7 @@ docker compose down
 | `mvn package -DskipTests` | Build the jars only; no Docker needed |
 | `JASYPT_ENCRYPTOR_PASSWORD=mtls-demo-master-key mvn -pl service-producer spring-boot:run` | Run the producer from the repo root |
 | `mvn -pl service-consumer spring-boot:run` | Run the consumer from the repo root |
+| `JASYPT_ENCRYPTOR_PASSWORD=mtls-demo-master-key mvn -pl service-producer spring-boot:run -Ptls-debug` | Run the producer with a full TLS handshake trace on stderr ([14.1](#tls-handshake-trace)). Works the same for the consumer |
 | `mvn -Psecurity-scan verify` | OWASP dependency check (profile from super-pom; reads `NVD_API_KEY`, which dependency-check strongly recommends setting) |
 | `mvn -Pmutation-test test` | PIT mutation testing (profile from super-pom) |
 
@@ -1245,7 +1613,7 @@ docker compose down
 `mvn test` and `mvn package` need Docker too, unless you pass `-DskipTests`.
 
 <a id="insomnia"></a>
-## <span style="color:hsl(275,80%,58%)">18. 🧪 Insomnia collection</span>
+## <span style="color:hsl(275,80%,58%)">19. 🧪 Insomnia collection</span>
 
 Insomnia never imports certificates. Its importer only carries workspaces, folders, requests and
 environments. So after importing, set up the certificates **once**, before calling any API.
@@ -1253,21 +1621,21 @@ Otherwise every request fails TLS verification.
 
 ```mermaid
 flowchart LR
-    A["18.1 Import<br/>insomnia-collection.json"] --> B["18.2 Add CA certificate<br/>insomnia-certs/ca.crt"]
-    B --> C["18.3 Add client certificates<br/>required for :8443<br/>localhost · 127.0.0.1"]
+    A["19.1 Import<br/>insomnia-collection.json"] --> B["19.2 Add CA certificate<br/>insomnia-certs/ca.crt"]
+    B --> C["19.3 Add client certificates<br/>required for :8443<br/>localhost · 127.0.0.1"]
     C --> D["Send requests"]
     B -. "enough for the<br/>consumer folder" .-> D
 ```
 
 <a id="insomnia-import"></a>
-### <span style="color:hsl(20,80%,58%)">18.1 Import the collection</span>
+### <span style="color:hsl(20,80%,58%)">19.1 Import the collection</span>
 
 In Insomnia, choose **Import** and pick [`insomnia-collection.json`](insomnia-collection.json) from the
 repo root. It creates the **learning-mtls** collection with a *Base Environment* (`consumerUrl`,
-`producerUrl`, `producerUrlAsUnknown`) and four folders ([18.4](#insomnia-folders)).
+`producerUrl`, `producerUrlAsUnknown`) and four folders ([19.4](#insomnia-folders)).
 
 <a id="insomnia-ca-certificate"></a>
-### <span style="color:hsl(80,80%,50%)">18.2 Add the CA certificate — before calling any API</span>
+### <span style="color:hsl(80,80%,50%)">19.2 Add the CA certificate — before calling any API</span>
 
 Both services use certificates signed by the private **mTLS Demo Root CA**. Insomnia doesn't
 trust that CA, so without it every request fails with
@@ -1305,9 +1673,9 @@ client certificate. **The producer on `:8443` also needs 18.3.** With only the C
 producer requests fail with `Failure when receiving data from the peer`.
 
 <a id="insomnia-client-certificates"></a>
-### <span style="color:hsl(300,70%,60%)">18.3 Add the client certificates — required for producer calls</span>
+### <span style="color:hsl(300,70%,60%)">19.3 Add the client certificates — required for producer calls</span>
 
-The producer requires a client certificate (`client-auth: need`). **The CA certificate from 18.2
+The producer requires a client certificate (`client-auth: need`). **The CA certificate from 19.2
 is not enough for `:8443`.** If no client certificate is configured for the host, Insomnia sends
 an empty certificate. The producer then rejects the handshake and Insomnia shows
 `Failure when receiving data from the peer`.
@@ -1336,7 +1704,7 @@ Check it after adding both:
 For successful greeting calls, use the *mTLS as service-consumer* folder (`localhost:8443`).
 
 <a id="insomnia-folders"></a>
-### <span style="color:hsl(165,80%,45%)">18.4 Folders and expected results</span>
+### <span style="color:hsl(165,80%,45%)">19.4 Folders and expected results</span>
 
 | Folder | Host | Client certificate | Shows |
 |---|---|---|---|
@@ -1346,12 +1714,12 @@ For successful greeting calls, use the *mTLS as service-consumer* folder (`local
 | service-producer — no client certificate | `localhost:8443` | disable it first | TLS alert `certificate_required` |
 
 <a id="insomnia-troubleshooting"></a>
-### <span style="color:hsl(0,70%,60%)">18.5 Troubleshooting</span>
+### <span style="color:hsl(0,70%,60%)">19.5 Troubleshooting</span>
 
 | Insomnia error | Cause | Fix |
 |---|---|---|
-| `SSL peer certificate or SSH remote key was not OK` | No CA certificate, disabled, or a different CA (curl error 60) | 18.2: add `insomnia-certs/ca.crt`, enable it, compare fingerprints |
-| `Failure when receiving data from the peer` on `:8443` | No client certificate for this host. Usually only the CA certificate from 18.2 is configured. Insomnia sent an empty certificate and the producer aborted the handshake with `certificate_required` (curl 56) | 18.3: add the client certificate for exactly `localhost:8443` / `127.0.0.1:8443` |
+| `SSL peer certificate or SSH remote key was not OK` | No CA certificate, disabled, or a different CA (curl error 60) | 19.2: add `insomnia-certs/ca.crt`, enable it, compare fingerprints |
+| `Failure when receiving data from the peer` on `:8443` | No client certificate for this host. Usually only the CA certificate from 19.2 is configured. Insomnia sent an empty certificate and the producer aborted the handshake with `certificate_required` (curl 56) | 19.3: add the client certificate for exactly `localhost:8443` / `127.0.0.1:8443` |
 | `Problem with the local SSL certificate` | Wrong passphrase or path for the `.p12` file (curl 58) | Passphrase is `changeit`; re-select the file |
 | `Couldn't connect to server` | Service not running (curl 7) | Start the producer (`:8443`) / consumer (`:9443`) |
 | `403` from the producer via `localhost` | The `localhost:8443` entry points at the wrong `.p12` | Use `service-consumer-keystore.p12` for `localhost:8443` |
@@ -1361,7 +1729,11 @@ only the CA certificate configured, it shows:
 
 | Timeline line | Meaning |
 |---|---|
-| `SSL certificate verify ok` | The CA certificate works (18.2 is done) |
+| `SSL certificate verify ok` | The CA certificate works (19.2 is done) |
 | `TLS handshake, Request CERT (13)` | The producer asks for a client certificate |
 | `(OUT), TLS handshake, Certificate (11)` with no `(OUT) … CERT verify (15)` after it | No client certificate matched the host, so Insomnia sent an empty one |
-| `tlsv13 alert certificate required` | The producer rejected the handshake. Add the client certificates (18.3) |
+| `tlsv13 alert certificate required` | The producer rejected the handshake. Add the client certificates (19.3) |
+
+The Timeline shows only the client's side. To see the producer's side of the same handshake,
+restart the producer with the `tls-debug` profile ([14.1](#tls-handshake-trace)). With no client
+certificate configured, its trace shows `Fatal (CERTIFICATE_REQUIRED): Empty client certificate chain`.

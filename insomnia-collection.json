@@ -10,7 +10,7 @@
       "parentId": null,
       "name": "learning-mtls",
       "scope": "collection",
-      "description": "Mutual-TLS demo: service-consumer (:9443, one-way TLS) calls service-producer (:8443, client-auth=need) with its client certificate.\n\nCertificates are not part of an Insomnia import. Set them once via the collection sidebar → **Certificates**:\n\n1. **Add CA Certificate** → `<repo>/insomnia-certs/ca.crt` (root README → 18.2) — do this before sending any request\n2. **Add Client Certificate** → Host `localhost:8443`, PFX or PKCS12 `<repo>/service-consumer/src/main/resources/ssl/service-consumer-keystore.p12`, Passphrase `changeit`\n3. **Add Client Certificate** → Host `127.0.0.1:8443`, PFX or PKCS12 `<repo>/service-producer/src/test/resources/ssl/service-unknown-keystore.p12`, Passphrase `changeit`"
+      "description": "Mutual-TLS demo: service-consumer (:9443, one-way TLS) calls service-producer (:8443, client-auth=need) with its client certificate.\n\nCertificates are not part of an Insomnia import. Set them once via the collection sidebar → **Certificates**:\n\n1. **Add CA Certificate** → `<repo>/insomnia-certs/ca.crt` (root README → 19.2) — do this before sending any request\n2. **Add Client Certificate** → Host `localhost:8443`, PFX or PKCS12 `<repo>/service-consumer/src/main/resources/ssl/service-consumer-keystore.p12`, Passphrase `changeit`\n3. **Add Client Certificate** → Host `127.0.0.1:8443`, PFX or PKCS12 `<repo>/service-producer/src/test/resources/ssl/service-unknown-keystore.p12`, Passphrase `changeit`"
     },
     {
       "_id": "env_base",
