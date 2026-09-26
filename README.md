@@ -106,7 +106,7 @@ org.springframework.boot:spring-boot-starter-parent:4.1.1
 `super-pom` is **not on Maven Central**. The aggregator declares it with an empty `<relativePath/>`,
 so it must already be in your local repository (`mvn install` it from its own project). Its enforcer
 accepts Java 21+ and Maven 3.9+, but `maven.compiler.release` is 25, so the build needs **JDK 25 or
-newer**. `learning-bom` also imports Spring Cloud 2025.1.2, which declares Boot 4.0.x and 4.1.x
+newer**. `learning-bom` also imports Spring Cloud 2025.1.3, which declares Boot 4.0.x and 4.1.x
 compatible. The consumer's OpenFeign and Feign versions come from there.
 
 <a id="certificates"></a>
