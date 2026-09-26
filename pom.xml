@@ -80,4 +80,14 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!-- mvn -pl <module> spring-boot:run -Ptls-debug: full JSSE handshake trace on stderr (README 14.1) -->
+        <profile>
+            <id>tls-debug</id>
+            <properties>
+                <spring-boot.run.jvmArguments>-Djavax.net.debug=ssl:handshake</spring-boot.run.jvmArguments>
+            </properties>
+        </profile>
+    </profiles>
 </project>
