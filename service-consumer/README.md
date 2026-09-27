@@ -641,14 +641,30 @@ check *the other side*.
 - **A pure client using ordinary HTTPS needs no keystore.** Calling a public API only requires
   trusting the server's CA, and the JDK's default truststore already holds the public CAs. There is
   nothing to configure.
-- **A pure client needs a keystore as soon as the server asks for a client certificate.** Without one,
-  it answers the `CertificateRequest` with an empty certificate, and a server running
-  `client-auth: need` aborts the handshake with `certificate_required`.
+- **A pure client needs a keystore as soon as the server asks for a client certificate (mTLS).**
+  In Spring Boot two different components are involved, one on each service:
+  - **On the called service, Tomcat does the asking.** With `server.ssl.client-auth: need`, Spring
+    Boot's [`SslConnectorCustomizer`][SslConnectorCustomizer] configures the embedded Tomcat to send a
+    `CertificateRequest` in every handshake and to refuse connections without a client certificate.
+    That service's own stores go to Tomcat through `server.ssl.bundle`: the keystore for its *server*
+    certificate, and the truststore to check the client's certificate.
+  - **On the calling service, the HTTP client does the answering.** Tomcat plays no part in an
+    outbound call. The client certificate must come from the [`SSLContext`][SSLContext] of the HTTP
+    client making the call: Feign, [`RestClient`][RestClient], `WebClient` or the JDK
+    [`HttpClient`][HttpClient]. In Spring Boot you give that client an SSL bundle that contains a
+    keystore; this project does it with [`HttpClientSettings`][HttpClientSettings]`.ofSslBundle(...)` in `ProducerFeignConfiguration`.
+  - **No keystore in the client's `SSLContext` means no certificate to send.** The client answers the
+    `CertificateRequest` with an empty certificate list, and Tomcat on the called service aborts the
+    handshake. A JDK 27 client without key managers calling the producer got
+    [`SSLHandshakeException`][SSLHandshakeException]`: (certificate_required) Received fatal alert: certificate_required`.
+    The same client with the consumer's keystore got `200` with `callerCn: service-consumer`.
 - **A pure server always needs a keystore for HTTPS**, because it must present a certificate and sign
   the handshake with its private key. It needs a truststore only if it verifies client certificates.
 
 **What that means for this module.** The consumer uses its keystore for both roles: as the client
-certificate towards the producer and as the server certificate on `:9443`.
+certificate towards the producer and as the server certificate on `:9443`. Spring Boot hands the same
+bundle to two places: to Tomcat through `server.ssl.bundle` (the server role on `:9443`), and to the
+Feign client through `clients.producer.ssl-bundle` (the client role towards the producer).
 
 - If the consumer exposed no API at all, it would still need `service-consumer-keystore.p12`, because
   the producer runs `client-auth: need`.

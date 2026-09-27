@@ -672,9 +672,23 @@ check *the other side*.
 - **A pure client using ordinary HTTPS needs no keystore.** Calling a public API only requires
   trusting the server's CA, and the JDK's default truststore already holds the public CAs. There is
   nothing to configure.
-- **A pure client needs a keystore as soon as the server asks for a client certificate.** Without one,
-  it answers the `CertificateRequest` with an empty certificate, and a server running
-  `client-auth: need` aborts the handshake with `certificate_required`.
+- **A pure client needs a keystore as soon as the server asks for a client certificate (mTLS).**
+  In Spring Boot two different components are involved, one on each service:
+  - **On the called service, Tomcat does the asking.** With `server.ssl.client-auth: need`, Spring
+    Boot's [`SslConnectorCustomizer`][SslConnectorCustomizer] configures the embedded Tomcat to send a
+    `CertificateRequest` in every handshake and to refuse connections without a client certificate.
+    That service's own stores go to Tomcat through `server.ssl.bundle`: the keystore for its *server*
+    certificate, and the truststore to check the client's certificate.
+  - **On the calling service, the HTTP client does the answering.** Tomcat plays no part in an
+    outbound call. The client certificate must come from the [`SSLContext`][SSLContext] of the HTTP
+    client making the call: Feign, [`RestClient`][RestClient], `WebClient` or the JDK
+    [`HttpClient`][HttpClient]. In Spring Boot you give that client an SSL bundle that contains a
+    keystore; this project does it with [`HttpClientSettings`][HttpClientSettings]`.ofSslBundle(...)` in the consumer's `ProducerFeignConfiguration`.
+  - **No keystore in the client's `SSLContext` means no certificate to send.** The client answers the
+    `CertificateRequest` with an empty certificate list, and Tomcat on the called service aborts the
+    handshake. A JDK 27 client without key managers calling the producer got
+    [`SSLHandshakeException`][SSLHandshakeException]`: (certificate_required) Received fatal alert: certificate_required`.
+    The same client with the consumer's keystore got `200` with `callerCn: service-consumer`.
 - **A pure server always needs a keystore for HTTPS**, because it must present a certificate and sign
   the handshake with its private key. It needs a truststore only if it verifies client certificates.
 
@@ -1164,6 +1178,7 @@ the private key ([13.2](#qa-ca-private-key)): a new CSR is one `openssl req` awa
 [ResourceAccessException]: https://github.com/spring-projects/spring-framework/blob/v7.0.9/spring-web/src/main/java/org/springframework/web/client/ResourceAccessException.java
 [RestClient]: https://github.com/spring-projects/spring-framework/blob/v7.0.9/spring-web/src/main/java/org/springframework/web/client/RestClient.java
 [Slf4j]: https://github.com/projectlombok/lombok/blob/v1.18.46/src/core/lombok/extern/slf4j/Slf4j.java
+[SslConnectorCustomizer]: https://github.com/spring-projects/spring-boot/blob/v4.1.1/module/spring-boot-tomcat/src/main/java/org/springframework/boot/tomcat/SslConnectorCustomizer.java
 [SSLContext]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/javax/net/ssl/SSLContext.java
 [SSLHandshakeException]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/javax/net/ssl/SSLHandshakeException.java
 [StringEncryptor]: https://github.com/jasypt/jasypt/blob/jasypt-1.9.3/jasypt/src/main/java/org/jasypt/encryption/StringEncryptor.java
