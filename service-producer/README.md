@@ -26,6 +26,7 @@
     - 13.2 [Does the CA email me the private key?](#qa-ca-private-key)
     - 13.3 [Does a service need a keystore if it only calls another service, or only serves one?](#qa-keystore-by-role)
     - 13.4 [How can a service make HTTPS calls without a keystore?](#qa-https-without-keystore)
+    - 13.5 [Do two services calling each other over mTLS need to swap truststores, or can they share one?](#qa-shared-truststore)
 
 <a id="stack"></a>
 ## <span style="color:hsl(278,80%,58%)">1. 🧰 Stack</span>
@@ -784,6 +785,70 @@ spring:
 mTLS. The producer here runs `client-auth: need`, so a client without a keystore sends that empty
 certificate list and the producer aborts the handshake with `certificate_required`
 (see [Running locally](#running-locally)).
+
+<a id="qa-shared-truststore"></a>
+### <span style="color:hsl(120,60%,45%)">13.5 Do two services calling each other over mTLS need to swap truststores, or can they share one?</span>
+
+**Q:** Do we have to exchange truststores when both microservices make HTTPS calls to each other with
+mTLS? Can one truststore holding both services' certificate chains and hostnames be kept and used by
+both?
+
+**A:** They can share one, and nothing has to be exchanged, as long as both certificates are issued by
+the same CA, which is the usual setup. Each side's truststore must hold the CA that signed the
+*other* side's certificate. With a common CA, "the other side's CA" is the same certificate for both
+services, so both truststores end up with identical contents.
+
+This repo already works that way:
+
+- Both `truststore.p12` files hold exactly one entry, `mtls-demo-ca` (`CN=mTLS Demo Root CA`), with
+  the same SHA-256 fingerprint (`FB:4D:48:…:9D:AD`). The files differ byte for byte only because
+  PKCS#12 uses random salts.
+- A run on JDK 27 with the files swapped still returned `200` with `callerCn: service-consumer`. The
+  producer loaded the consumer's truststore, and the consumer loaded the producer's.
+
+What goes into the shared truststore, and what doesn't:
+
+| Item | In the truststore? | Why |
+|---|---|---|
+| The CA certificate (root, plus intermediates the peers don't send) | ✅ | Path validation needs only this: each side's certificate must chain up to it. |
+| Each service's own (leaf) certificate | ❌ normally | Trusting the CA already accepts every certificate it issues. Adding leaves is *pinning*, and then every renewal means updating the other side's truststore: exactly the exchange you want to avoid. |
+| Hostnames | ❌ never | A truststore holds no hostnames. The client compares the host it dialled with the SAN inside the *server's* certificate (`DNS:localhost` and `IP:127.0.0.1` here). |
+| Private keys | ❌ never | They belong in each service's own **keystore**, which is never shared. |
+
+When both services call each other:
+
+- **Each service still needs its own keystore** with its own private key. Every certificate then acts
+  as both a server and a client certificate. Its extended key usage must therefore include both
+  `serverAuth` and `clientAuth`, as this repo's certificates do.
+- **Only the calling side checks a hostname.** The calling service checks the other's SAN; the
+  service being called checks no hostname at all. It identifies the caller from the certificate
+  instead, as the producer's CN allow-list does.
+- **With two different CAs** (two teams or companies), each truststore must hold the *other* side's
+  CA. One combined truststore with both CAs works for both services, but it widens trust: each
+  service then also accepts peers issued by its own CA. Inside one organisation that's usually fine.
+  Across organisations, prefer separate truststores.
+- **Sharing the file is safe, because it holds no secrets, only public certificates.** Protect its
+  integrity all the same: anyone who can add a CA to the shared file gets their certificates accepted
+  by both services.
+- **Rotation:** with a shared CA, renewing one service's certificate touches only that service's
+  keystore. Only rotating the CA itself changes the shared truststore:
+  1. add the new CA;
+  2. re-issue the certificates;
+  3. remove the old CA.
+
+In Spring Boot, both services can point their bundle's truststore at the same file, for example a
+mounted secret. The keystore section stays per service:
+
+```yaml
+spring:
+  ssl:
+    bundle:
+      jks:
+        service-consumer:                    # same truststore settings in both services
+          truststore:
+            location: file:/etc/mtls/truststore.p12
+            password: ${TRUSTSTORE_PASSWORD}
+```
 
 <!-- Library classes mentioned above, linked to their source at the versions this project builds with. -->
 
