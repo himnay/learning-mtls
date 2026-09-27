@@ -779,8 +779,9 @@ the same TLS stack as Insomnia) against the producer on JDK 25, traced as in
 [14.1](#tls-handshake-trace).
 
 <p align="center">
-  <img src="docs/images/tcp-ip-model.png" alt="TCP/IP model infographic: the four layers, how data travels from a PC to a server, encapsulation on the sender and decapsulation on the receiver">
-  <br><sub>Infographic: <i>Networking with Israr</i></sub>
+  <img src="docs/images/tcp-ip-model.png" width="720" alt="TCP/IP model infographic: application, transport, internet and network interface layers, each with its PDU (data, segment, packet, frame and bits), the devices that work at it, and example protocols">
+  <br><sub>Infographic: <i>reallabworkbook.com</i>. One correction: BGP is not a transport protocol. It is an
+  application-layer routing protocol that runs over TCP port 179.</sub>
 </p>
 
 <a id="tcp-ip-layers"></a>
@@ -795,7 +796,7 @@ in, each layer removes its header and passes the rest up (**decapsulation**).
 | 4 | Application | What is said, and keeping it secret | HTTP message in TLS records | host name + path | HTTP/1.1 inside TLS 1.3 | The JVM: Spring MVC, Tomcat, JSSE `SSLEngine` |
 | 3 | Transport | Reliable, ordered bytes between two programs | Segment | Port | TCP, client port `43364` → `8443` | Linux kernel (TCP); Tomcat `NioEndpoint` owns the socket |
 | 2 | Internet | Delivering packets between hosts | Packet | IP address | IPv6 `::1` → `::1` | Linux kernel (routing) |
-| 1 | Network access | Moving frames across one link | Frame | MAC address | Loopback `lo` (one machine) | Kernel driver; network card and switch between machines |
+| 1 | Network access (network interface) | Moving frames across one link | Frame | MAC address | Loopback `lo` (one machine) | Kernel driver; network card and switch between machines |
 
 TLS has no layer of its own. It runs at the bottom of the application layer: to TCP and the
 routers it is just application data on port 8443, and to HTTP it is a secure pipe. The
