@@ -27,6 +27,7 @@
     - 13.3 [Does a service need a keystore if it only calls another service, or only serves one?](#qa-keystore-by-role)
     - 13.4 [How can a service make HTTPS calls without a keystore?](#qa-https-without-keystore)
     - 13.5 [Do two services calling each other over mTLS need to swap truststores, or can they share one?](#qa-shared-truststore)
+    - 13.6 [What is a private key, how do you create one, and what's inside it?](#qa-private-key)
 
 <a id="stack"></a>
 ## <span style="color:hsl(278,80%,58%)">1. 🧰 Stack</span>
@@ -849,6 +850,127 @@ spring:
             location: file:/etc/mtls/truststore.p12
             password: ${TRUSTSTORE_PASSWORD}
 ```
+
+<a id="qa-private-key"></a>
+### <span style="color:hsl(250,75%,65%)">13.6 What is a private key, how do you create one, and what's inside it?</span>
+
+**Q:** What is a private key, how do you create one, and what does it actually contain?
+
+**A:**
+
+**What a private key is.** A private key is the secret half of an asymmetric (public/private) key
+pair; every key pair in this project is RSA. The public half ends up inside the `.crt` the CA
+signs and can be shared with anyone. The private half must never leave the host that generated it
+([13.2](#qa-ca-private-key)) — whoever holds it can do two things the public key alone cannot:
+
+- **Sign** — produce a signature over data that anyone with the public key can verify came from the
+  key holder. TLS uses this in `CertificateVerify` during the handshake ([13.2](#qa-ca-private-key)
+  diagram).
+- **Decrypt** — recover plaintext encrypted with the matching public key. TLS 1.3 ([Stack](#stack))
+  doesn't use this for the session itself — session keys come from ephemeral X25519/ECDHE instead
+  ([13.4](#qa-https-without-keystore)) — so here the private key's only job in the handshake is
+  signing.
+
+Mathematically it isn't one secret number; it's a small set of numbers derived from two large
+random primes, listed in the last part below. (EC/Ed25519 private keys look different — a single
+random scalar — but this project uses RSA throughout, so that's not covered here.)
+
+**How you create one.** `generate-certs.sh` ([4.1](#how-mutual-tls-is-enforced)) creates every leaf
+key the same way, as a side effect of building the CSR:
+
+```bash
+openssl req -newkey rsa:2048 -nodes -sha256 \
+  -keyout service-producer.key -out service-producer.csr \
+  -subj "/CN=service-producer/O=com.org"
+```
+
+`-newkey rsa:2048` does the actual key generation before the CSR is built:
+
+1. Generate two large random primes, **p** and **q** (~1024 bits each, so their product is 2048 bits).
+2. Compute the modulus **n = p × q** and **φ(n) = (p−1)(q−1)**.
+3. Pick the public exponent **e** — almost always `65537` (`0x10001`): prime, cheap to verify with,
+   large enough to avoid low-exponent attacks.
+4. Compute the private exponent **d = e⁻¹ mod φ(n)** (modular inverse).
+5. Store `p`, `q` and the CRT (Chinese Remainder Theorem) helper values alongside `d`, so signing
+   with the key runs roughly 4× faster than a naive computation using `d` alone.
+
+`-nodes` ("no DES") writes `service-producer.key` **unencrypted** — anyone who can read the file
+has the key. That's fine here because the script immediately folds it into a password-protected
+`.p12` ([4.1](#how-mutual-tls-is-enforced)) and the loose file never leaves the CA host; a
+standalone `.key` you intend to keep around should instead be generated with a passphrase
+(`-aes256`) or protected by filesystem/KMS permissions. It also never gets the chance to be
+committed by accident — `*.key` and `certs/out/` are both in `.gitignore`.
+
+Same generation, spelled out as its own command (what `-newkey` does internally):
+
+```bash
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out service-producer.key
+```
+
+Or with `keytool`, which generates the key **and** stores it directly inside a keystore entry,
+self-signed until a CA-issued certificate replaces it ([13.1](#qa-keystore-from-crt)):
+
+```bash
+keytool -genkeypair -alias service-producer -keyalg RSA -keysize 2048 \
+  -keystore service-producer-keystore.p12 -storetype PKCS12
+```
+
+**What we have in a private key.** An RSA private key is a small ASN.1 structure, not just "a
+number" — `openssl rsa -in service-producer.key -text -noout` prints every field:
+
+| Field | What it is | Secret? |
+|---|---|---|
+| `modulus` (n) | p × q — also published inside the certificate as the public key's modulus | No (public) |
+| `publicExponent` (e) | Almost always `65537` | No (public) |
+| `privateExponent` (d) | e⁻¹ mod φ(n) — the number that makes the key "private"; this plus `n` is enough to decrypt/sign | **Yes** |
+| `prime1`, `prime2` (p, q) | The two random primes whose product is n | **Yes** — leaking either lets an attacker factor n instantly and rederive d |
+| `exponent1`, `exponent2` | d mod (p−1), d mod (q−1) — CRT shortcuts | **Yes** |
+| `coefficient` | q⁻¹ mod p — the third CRT shortcut | **Yes** |
+
+```
+Private-Key: (2048 bit, 2 primes)
+modulus:
+    00:ac:7d:40:ea:f7:a9:fc:51:a2:b1:ff:f3:02:e7:
+    ... (2048 bits ≈ 256 bytes, printed as hex)
+publicExponent: 65537 (0x10001)
+privateExponent:
+    4a:ea:5b:b7:b1:b9:72:8d:42:4c:6d:0d:ee:c4:d7:
+    ...
+prime1: ...
+prime2: ...
+exponent1: ...
+exponent2: ...
+coefficient: ...
+```
+
+(Run against a throwaway key, OpenSSL 3.6.3 — the bytes are irrelevant, only the field names matter.)
+
+On disk, that structure is DER-encoded (binary ASN.1), then Base64-wrapped between markers — that's
+what a `.key` file is:
+
+```
+-----BEGIN PRIVATE KEY-----
+MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQCsfUDq96n8UaKx
+...
+-----END PRIVATE KEY-----
+```
+
+Two header styles show up in the wild, and it matters which one a tool expects:
+
+| Header | Format | Notes |
+|---|---|---|
+| `-----BEGIN PRIVATE KEY-----` | PKCS#8 | Algorithm-agnostic wrapper (RSA, EC, Ed25519 all use it). What `openssl req -newkey` and `genpkey` produce by default on OpenSSL 3.x — confirmed against this repo's exact command above, so this is what `generate-certs.sh` actually writes |
+| `-----BEGIN RSA PRIVATE KEY-----` | PKCS#1 | RSA-only, older format; still produced by `openssl genrsa` and seen in older tooling/exports |
+| `-----BEGIN ENCRYPTED PRIVATE KEY-----` | PKCS#8, encrypted | The key content is itself encrypted with a passphrase (`-aes256` at generation) |
+
+Converting between them re-wraps the same key, it doesn't create a new one:
+`openssl rsa -in key.pem -out key.pem` → PKCS#1, `openssl pkey -in key.pem -out key.pem` → PKCS#8.
+
+Once `service-producer.key` is folded into `service-producer-keystore.p12`
+([4.1](#how-mutual-tls-is-enforced)), this same field structure sits inside the PKCS#12 file's
+`PrivateKeyEntry` — just encrypted at rest with the store password instead of living in a plaintext
+`.key` file. `keytool -list -v` names the entry and shows the certificate; it never prints the
+private fields above.
 
 <!-- Library classes mentioned above, linked to their source at the versions this project builds with. -->
 
