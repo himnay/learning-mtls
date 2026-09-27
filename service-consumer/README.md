@@ -22,6 +22,7 @@
     - 12.6 [Does a service need a keystore if it only calls another service, or only serves one?](#qa-keystore-by-role)
     - 12.7 [How can a service make HTTPS calls without a keystore, and why does mTLS need one?](#qa-https-without-keystore)
     - 12.8 [Do two services calling each other over mTLS need to swap truststores, or can they share one?](#qa-shared-truststore)
+    - 12.9 [What is signing during the TLS handshake, and why does it need a private key?](#qa-handshake-signing)
 
 <a id="stack"></a>
 ## <span style="color:hsl(278,80%,58%)">1. 🧰 Stack</span>
@@ -911,6 +912,92 @@ spring:
             location: file:/etc/mtls/truststore.p12
             password: ${TRUSTSTORE_PASSWORD}
 ```
+
+<a id="qa-handshake-signing"></a>
+### <span style="color:hsl(200,80%,55%)">12.9 What is signing during the TLS handshake, and why does it need a private key?</span>
+
+**Q:** What is signing during the TLS handshake, and why does it need a private key?
+
+**A:** Signing is how each side proves, *during this very handshake*, that it owns the certificate it
+just sent. A certificate is public: anyone can copy it and send it again, so presenting one proves
+nothing. Ownership is proven by a fresh signature that only the holder of the matching private key
+can produce.
+
+**What gets signed.** In TLS 1.3 the proof is the `CertificateVerify` message, sent right after the
+`Certificate` message. It carries a digital signature over:
+
+1. 64 space bytes and a context string, either `TLS 1.3, server CertificateVerify` or
+   `TLS 1.3, client CertificateVerify`. A server's signature can therefore never pass as a client's.
+2. The hash of the handshake so far: every message from `ClientHello` on, including both sides'
+   random values, both ephemeral ECDHE key shares and the certificate just sent.
+
+The server signs in every full handshake. The client signs only in mTLS, after the server's
+`CertificateRequest`. In this project both sides use `rsa_pss_rsae_sha256`, that is RSA-PSS over a
+SHA-256 hash ([root README — what this project negotiates](../README.md#negotiated-parameters)).
+
+**Why only a private key can do it.** Producing a signature is a calculation that needs the private
+key. Checking one needs only the matching public key, which anyone can have. The peer takes the
+public key from the certificate it just received and verifies the signature:
+
+- **Valid:** the sender holds the private key that belongs to this certificate.
+- **Invalid:** the peer aborts the handshake with a `decrypt_error` alert.
+
+Try it with this repo's keys (the PEM files in `certs/out`, see
+[root README — Quick start](../README.md#quick-start), step 3). Sign some bytes with the consumer's private
+key, then verify:
+
+```bash
+cd certs/out
+echo -n "stand-in for the handshake transcript" > transcript.bin
+openssl dgst -sha256 -sigopt rsa_padding_mode:pss -sign service-consumer.key -out transcript.sig transcript.bin
+openssl x509 -in service-consumer.crt -pubkey -noout > consumer-pub.pem
+openssl dgst -sha256 -sigopt rsa_padding_mode:pss -verify consumer-pub.pem -signature transcript.sig transcript.bin
+```
+
+| Verified with | Data | Result (OpenSSL 3.5) |
+|---|---|---|
+| the consumer's public key | unchanged | `Verified OK` |
+| the consumer's public key | one byte changed | `Verification failure` (`bad signature`) |
+| the producer's public key | unchanged | `Verification failure` |
+
+The signature is 256 bytes, the size of the 2048-bit RSA key.
+
+**Why the handshake transcript is what gets signed.** The transcript contains this connection's
+random values and ephemeral key shares, which gives two guarantees:
+
+- **No replay.** A signature captured from one handshake is useless in any other, because every
+  transcript is different.
+- **No man in the middle.** An attacker who swaps in their own ECDHE key share changes the
+  transcript. Without the private key they can't sign the changed transcript, so the victim aborts.
+  This is what ties the certificate's identity to the key exchange that protects the traffic.
+
+**Two signatures, two private keys.**
+
+```mermaid
+flowchart LR
+    CAK["CA private key<br/>kept offline"] -- "signs once, at issuance" --> CERT["service certificate<br/>public key + CN + SAN"]
+    SK["service private key<br/>in the keystore"] -- "signs in every handshake" --> CV["CertificateVerify<br/>signature over the transcript"]
+    CERT --> P1["peer checks the CA signature with the CA certificate<br/>from its truststore: this public key belongs to this CN"]
+    CV --> P2["peer checks the CertificateVerify signature with the public key<br/>from the certificate: the sender holds the private key"]
+```
+
+- **The CA's signature** is made once, with the CA's private key. It vouches that the public key in
+  the certificate belongs to `CN=service-consumer`. The peer checks it with the CA certificate from
+  its truststore.
+- **The `CertificateVerify` signature** is made in every full handshake, with the service's own
+  private key from its keystore. It proves that whoever is on the other end right now holds that key.
+
+Both are needed. The first alone could be replayed by anyone who copied the certificate. The second
+alone proves possession of *a* key, but not whose key it is.
+
+**Signing, not encrypting.** In TLS 1.3 the certificate's key only signs. The traffic keys come from
+the ephemeral ECDHE exchange, so a private key stolen later can't decrypt recorded traffic (forward
+secrecy). It would, however, let the thief impersonate the service until the certificate is revoked
+or expires. The old TLS 1.2 `TLS_RSA_*` cipher suites used the certificate's key to *decrypt* the
+session secret instead, and TLS 1.3 dropped them for that reason.
+
+More on the private key itself: [the producer README's 13.6](../service-producer/README.md#qa-private-key). Signature algorithms in general:
+[root README — digital signatures](../README.md#digital-signatures).
 
 <!-- Library classes mentioned above, linked to their source at the versions this project builds with. -->
 
