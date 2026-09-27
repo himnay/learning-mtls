@@ -81,12 +81,12 @@ sequenceDiagram
 | **Spring Boot SSL bundle** (`spring.ssl.bundle.jks.service-producer`) | `application.yml` | One named bundle holds keystore + truststore + protocol options; the server references it via `server.ssl.bundle`. |
 | **`server.ssl.client-auth: need`** | `application.yml` | Makes Tomcat *require* a client cert; untrusted or missing certs fail in the handshake — no HTTP request is ever produced. |
 | **CN allow-list filter** | `filter/ClientCertificateFilter` | Transport trust ≠ authorization. Any cert from the CA passes TLS; only listed CNs reach the controller (others get `403`). |
-| **`@ConfigurationProperties` record** | `config/MtlsProperties` | Immutable, type-safe binding of `mtls.allowed-client-cns`. |
+| **[`@ConfigurationProperties`][ConfigurationProperties] record** | `config/MtlsProperties` | Immutable, type-safe binding of `mtls.allowed-client-cns`. |
 | **Spring Data JDBC with a record entity** | `entites/GreetingTemplate`, `repository/GreetingTemplateRepository` | Zero-boilerplate read model; no JPA/Hibernate needed for a lookup table. |
 | **Flyway migrations** | `src/main/resources/db/migration` | Schema (`V1`) and seed data (`V2`) are versioned and applied on startup. |
 | **Jasypt `ENC(...)`** | `spring.datasource.password` | DB password is stored encrypted in YAML; decrypted in memory at startup with a master key supplied via env. |
 | **RFC 9457 Problem Details** | `spring.mvc.problemdetails.enabled` | Unknown language → `404` with `application/problem+json`. |
-| **Lombok** | `@RequiredArgsConstructor`, `@Slf4j` | Constructor injection and loggers without boilerplate. |
+| **Lombok** | [`@RequiredArgsConstructor`][RequiredArgsConstructor], [`@Slf4j`][Slf4j] | Constructor injection and loggers without boilerplate. |
 | **Records** | DTOs, entity, config properties | Immutable data carriers with generated accessors/equals/hashCode. |
 | **DevTools** | root `pom.xml` (runtime, optional) | Auto-restart on recompile during `spring-boot:run`; excluded from the packaged jar. |
 | **Actuator `info` / `health`** | `management.*`, `info.app.*` | Build, git, Java, OS and app metadata at `/actuator/info`. |
@@ -131,7 +131,7 @@ is explained in [root README — PKI, keystores, TLS handshake](../README.md#pki
 
 | Layer | Component | Rejects | Result for caller |
 |---|---|---|---|
-| L4 / TLS | Tomcat + `client-auth: need` | no client cert, self-signed cert, cert from another CA, expired cert | handshake failure (`curl` exit 56, Java `SSLHandshakeException`) |
+| L4 / TLS | Tomcat + `client-auth: need` | no client cert, self-signed cert, cert from another CA, expired cert | handshake failure (`curl` exit 56, Java [`SSLHandshakeException`][SSLHandshakeException]) |
 | L7 / HTTP | `ClientCertificateFilter` | CA-signed cert whose CN is not in `mtls.allowed-client-cns` | `403 Forbidden` |
 
 Tomcat's check is standard X.509 path validation (JSSE) against `truststore.p12`. It walks the
@@ -143,7 +143,7 @@ trusted-but-unauthorized cert like `service-unknown` (§4.1) passes the handshak
 identity/authorization is entirely the filter's job, one layer up.
 
 The filter reads the verified chain from the standard servlet attribute
-`jakarta.servlet.request.X509Certificate`, extracts the CN via `LdapName`, and stores it as
+`jakarta.servlet.request.X509Certificate`, extracts the CN via [`LdapName`][LdapName], and stores it as
 request attribute `mtls.client.cn` so the controller can echo `callerCn`.
 `/actuator/health` is exempt from the CN check (the TLS layer still applies); `/actuator/info` is not.
 
@@ -202,8 +202,8 @@ ProducerApplication → Environment variables*).
 ### <span style="color:hsl(80,80%,50%)">6.2 How decryption works at startup</span>
 
 Spring Boot itself has no built-in property decryption; `jasypt-spring-boot-starter` plugs
-into the `Environment` so decryption is transparent to every consumer of a property
-(`@Value`, `@ConfigurationProperties`, auto-configuration).
+into the [`Environment`][Environment] so decryption is transparent to every consumer of a property
+([`@Value`][Value], [`@ConfigurationProperties`][ConfigurationProperties], auto-configuration).
 
 ```mermaid
 sequenceDiagram
@@ -228,15 +228,15 @@ sequenceDiagram
 ```
 
 1. **Auto-configuration** — the starter registers
-   `EnableEncryptablePropertiesBeanFactoryPostProcessor`, which runs before any application bean
-   and wraps each `PropertySource` (application.yml, env vars, system props, …).
+   [`EnableEncryptablePropertiesBeanFactoryPostProcessor`][EnableEncryptablePropertiesBeanFactoryPostProcessor], which runs before any application bean
+   and wraps each [`PropertySource`][PropertySource] (application.yml, env vars, system props, …).
 2. **Detection** — on every `getProperty(...)`, the wrapper asks the
-   `EncryptablePropertyDetector` whether the raw value is wrapped in `ENC(` … `)`.
+   [`EncryptablePropertyDetector`][EncryptablePropertyDetector] whether the raw value is wrapped in `ENC(` … `)`.
    Plain values pass through untouched.
-3. **Resolution** — the `EncryptablePropertyResolver` strips the wrapper and hands the Base64
-   payload to the `StringEncryptor` bean (`jasyptStringEncryptor`, built from `jasypt.encryptor.*`).
+3. **Resolution** — the [`EncryptablePropertyResolver`][EncryptablePropertyResolver] strips the wrapper and hands the Base64
+   payload to the [`StringEncryptor`][StringEncryptor] bean (`jasyptStringEncryptor`, built from `jasypt.encryptor.*`).
 4. **Decryption** — see 6.3. The result is cached, so decryption runs once per property.
-5. **Use** — `DataSourceProperties` receives the plaintext, HikariCP opens connections and
+5. **Use** — [`DataSourceProperties`][DataSourceProperties] receives the plaintext, HikariCP opens connections and
    Flyway runs. The plaintext lives **only in JVM memory**; it is never written back to disk.
 
 <a id="inside-enc"></a>
@@ -269,7 +269,7 @@ Consequences:
 - **Security rests entirely on the master key.** Anyone with the ciphertext *and*
   `JASYPT_ENCRYPTOR_PASSWORD` can decrypt. Keep the key out of git, images and logs.
 - `key-obtention-iterations` and `iv-generator-classname` must match between encryption and
-  decryption, otherwise startup fails with `DecryptionException`.
+  decryption, otherwise startup fails with [`DecryptionException`][DecryptionException].
 
 <a id="crypto-building-blocks"></a>
 ### <span style="color:hsl(45,80%,50%)">6.4 Crypto building blocks explained</span>
@@ -287,7 +287,7 @@ solves a specific problem:
 | **Iterations** (`key-obtention-iterations`) | Number of PBKDF2 rounds | Slows brute force linearly (1 000 rounds = 1 000× the work per guess) | 1 000. Raise it in production: OWASP suggests 210 000 for PBKDF2-HMAC-SHA512, and it only runs once per property at startup |
 | **AES-256** | Symmetric block cipher, 128-bit blocks, 256-bit key | Actual confidentiality of the data | key from PBKDF2 |
 | **CBC mode** (Cipher Block Chaining) | Each plaintext block is XOR-ed with the previous ciphertext block before encryption | Identical plaintext blocks don't produce identical ciphertext blocks | — |
-| **IV** (Initialisation Vector) | Random "previous block" for the first CBC block, stored in clear | Same key + same plaintext → different ciphertext; hides repeated values | 16 random bytes (`RandomIvGenerator`) |
+| **IV** (Initialisation Vector) | Random "previous block" for the first CBC block, stored in clear | Same key + same plaintext → different ciphertext; hides repeated values | 16 random bytes ([`RandomIvGenerator`][RandomIvGenerator]) |
 | **PKCS#5/#7 padding** | Pads plaintext to a multiple of 16 bytes | AES-CBC only encrypts whole blocks | `mtls_s3cret` (11 B) + 5 pad bytes = 16 B |
 | **Base64** | Binary-to-text encoding | Lets the bytes live inside YAML | 48 bytes → 64 chars |
 
@@ -457,7 +457,7 @@ doubles as the clients' truststore. Because the class name ends in `Test`, Suref
 | `allowListedClientReceivesGreetingFromDatabase` | `service-consumer` | `200`, `"Bonjour, mtls !"` from DB |
 | `unknownLanguageIsNotFound` | `service-consumer` | `404` |
 | `trustedButNotAllowListedClientIsForbidden` | `service-unknown` | `403` |
-| `handshakeFailsWithoutClientCertificate` | none | `ResourceAccessException` (TLS) |
+| `handshakeFailsWithoutClientCertificate` | none | [`ResourceAccessException`][ResourceAccessException] (TLS) |
 
 <a id="project-layout"></a>
 ## <span style="color:hsl(260,60%,65%)">11. 📁 Project layout</span>
@@ -686,7 +686,28 @@ In Spring Boot, an SSL bundle may hold just one of the two stores:
 
 - **Truststore only:** gives an HTTP client trust in a private CA without presenting a client
   certificate.
-- **Keystore only:** trust falls back to the JDK's default truststore. `DefaultSslManagerBundle`
-  initialises the `TrustManagerFactory` with `null`, and `null` means the JDK default.
+- **Keystore only:** trust falls back to the JDK's default truststore. [`DefaultSslManagerBundle`][DefaultSslManagerBundle]
+  initialises the [`TrustManagerFactory`][TrustManagerFactory] with `null`, and `null` means the JDK default.
 - **Server side:** `server.ssl.bundle` needs the keystore. Add a truststore and
   `server.ssl.client-auth: need` only for mTLS.
+
+<!-- Library classes mentioned above, linked to their source at the versions this project builds with. -->
+
+[ConfigurationProperties]: https://github.com/spring-projects/spring-boot/blob/v4.1.1/core/spring-boot/src/main/java/org/springframework/boot/context/properties/ConfigurationProperties.java
+[DataSourceProperties]: https://github.com/spring-projects/spring-boot/blob/v4.1.1/module/spring-boot-jdbc/src/main/java/org/springframework/boot/jdbc/autoconfigure/DataSourceProperties.java
+[DecryptionException]: https://github.com/ulisesbocchio/jasypt-spring-boot/blob/jasypt-spring-boot-parent-4.0.4/jasypt-spring-boot/src/main/java/com/ulisesbocchio/jasyptspringboot/exception/DecryptionException.java
+[DefaultSslManagerBundle]: https://github.com/spring-projects/spring-boot/blob/v4.1.1/core/spring-boot/src/main/java/org/springframework/boot/ssl/DefaultSslManagerBundle.java
+[EnableEncryptablePropertiesBeanFactoryPostProcessor]: https://github.com/ulisesbocchio/jasypt-spring-boot/blob/jasypt-spring-boot-parent-4.0.4/jasypt-spring-boot/src/main/java/com/ulisesbocchio/jasyptspringboot/configuration/EnableEncryptablePropertiesBeanFactoryPostProcessor.java
+[EncryptablePropertyDetector]: https://github.com/ulisesbocchio/jasypt-spring-boot/blob/jasypt-spring-boot-parent-4.0.4/jasypt-spring-boot/src/main/java/com/ulisesbocchio/jasyptspringboot/EncryptablePropertyDetector.java
+[EncryptablePropertyResolver]: https://github.com/ulisesbocchio/jasypt-spring-boot/blob/jasypt-spring-boot-parent-4.0.4/jasypt-spring-boot/src/main/java/com/ulisesbocchio/jasyptspringboot/EncryptablePropertyResolver.java
+[Environment]: https://github.com/spring-projects/spring-framework/blob/v7.0.9/spring-core/src/main/java/org/springframework/core/env/Environment.java
+[LdapName]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.naming/share/classes/javax/naming/ldap/LdapName.java
+[PropertySource]: https://github.com/spring-projects/spring-framework/blob/v7.0.9/spring-core/src/main/java/org/springframework/core/env/PropertySource.java
+[RandomIvGenerator]: https://github.com/jasypt/jasypt/blob/jasypt-1.9.3/jasypt/src/main/java/org/jasypt/iv/RandomIvGenerator.java
+[RequiredArgsConstructor]: https://github.com/projectlombok/lombok/blob/v1.18.46/src/core/lombok/RequiredArgsConstructor.java
+[ResourceAccessException]: https://github.com/spring-projects/spring-framework/blob/v7.0.9/spring-web/src/main/java/org/springframework/web/client/ResourceAccessException.java
+[Slf4j]: https://github.com/projectlombok/lombok/blob/v1.18.46/src/core/lombok/extern/slf4j/Slf4j.java
+[SSLHandshakeException]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/javax/net/ssl/SSLHandshakeException.java
+[StringEncryptor]: https://github.com/jasypt/jasypt/blob/jasypt-1.9.3/jasypt/src/main/java/org/jasypt/encryption/StringEncryptor.java
+[TrustManagerFactory]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/javax/net/ssl/TrustManagerFactory.java
+[Value]: https://github.com/spring-projects/spring-framework/blob/v7.0.9/spring-beans/src/main/java/org/springframework/beans/factory/annotation/Value.java

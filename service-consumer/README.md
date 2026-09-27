@@ -24,19 +24,19 @@
 <a id="stack"></a>
 ## <span style="color:hsl(278,80%,58%)">1. 🧰 Stack</span>
 
-| Component    | Version / Detail                                                     |
-|--------------|----------------------------------------------------------------------|
-| Java         | 25 (`maven.compiler.release` from super-pom; needs JDK 25+)          |
-| Spring Boot  | 4.1.1 (via `learning-mtls` → `super-pom`)                            |
-| Spring Cloud | 2025.1.3 (via `learning-bom`): OpenFeign 5.0.3                       |
-| Web          | Spring MVC on embedded Tomcat, HTTPS (port `9443`)                   |
-| HTTP client  | Feign 13.6.1 `@FeignClient` on the JDK `HttpClient` (`feign-java11`) |
-| JSON         | Jackson 3 (`tools.jackson`, the Spring Boot 4 default)               |
-| TLS          | Spring Boot SSL bundles, PKCS12, TLS 1.3 / 1.2                       |
-| Boilerplate  | Lombok + Java records                                                |
-| Dev loop     | Spring Boot DevTools (auto-restart)                                  |
-| Tests        | JUnit Jupiter 6, `@WebMvcTest`, Mockito                              |
-| Build        | Maven 3.9+                                                           |
+| Component    | Version / Detail                                                                                  |
+|--------------|---------------------------------------------------------------------------------------------------|
+| Java         | 25 (`maven.compiler.release` from super-pom; needs JDK 25+)                                       |
+| Spring Boot  | 4.1.1 (via `learning-mtls` → `super-pom`)                                                         |
+| Spring Cloud | 2025.1.3 (via `learning-bom`): OpenFeign 5.0.3                                                    |
+| Web          | Spring MVC on embedded Tomcat, HTTPS (port `9443`)                                                |
+| HTTP client  | Feign 13.6.1 [`@FeignClient`][FeignClient] on the JDK [`HttpClient`][HttpClient] (`feign-java11`) |
+| JSON         | Jackson 3 (`tools.jackson`, the Spring Boot 4 default)                                            |
+| TLS          | Spring Boot SSL bundles, PKCS12, TLS 1.3 / 1.2                                                    |
+| Boilerplate  | Lombok + Java records                                                                             |
+| Dev loop     | Spring Boot DevTools (auto-restart)                                                               |
+| Tests        | JUnit Jupiter 6, [`@WebMvcTest`][WebMvcTest], Mockito                                             |
+| Build        | Maven 3.9+                                                                                        |
 
 <a id="what-this-service-does"></a>
 ## <span style="color:hsl(56,80%,50%)">2. 🎯 What this service does</span>
@@ -60,7 +60,7 @@ Both sides validate each other:
 
 | Direction | Who validates | Against |
 |---|---|---|
-| consumer → producer server cert | consumer's Feign client (JDK `HttpClient`) | `ssl/truststore.p12` (demo root CA) + hostname (`localhost` SAN) |
+| consumer → producer server cert | consumer's Feign client (JDK [`HttpClient`][HttpClient]) | `ssl/truststore.p12` (demo root CA) + hostname (`localhost` SAN) |
 | producer ← consumer client cert | producer's Tomcat + CN filter | producer truststore + `mtls.allowed-client-cns` |
 
 <a id="features-used"></a>
@@ -69,12 +69,12 @@ Both sides validate each other:
 | Feature | Where | Why |
 |---|---|---|
 | **Spring Boot SSL bundle** (`spring.ssl.bundle.jks.service-consumer`) | `application.yml` | Single definition of identity + trust, reused for the inbound server *and* the outbound client. |
-| **OpenFeign client** (`@FeignClient`) | `client/ProducerClient` | Declarative interface: one Spring MVC–annotated method per producer endpoint; Feign generates the implementation. |
-| **`@EnableFeignClients(clients = ProducerClient.class)`** | `config/ProducerClientConfig` | Registers just this client. Kept off the application class so `@WebMvcTest` slices don't create Feign clients. |
-| **Per-client Feign configuration** | `config/ProducerFeignConfiguration` | `feign.Client` bean: Feign's `Http2Client` over a JDK `HttpClient` that Boot's `JdkHttpClientBuilder` builds from `HttpClientSettings.ofSslBundle(...)`. It carries the client cert, trust, TLS protocols and connect timeout. `Request.Options` sets the per-request timeouts. Not a `@Configuration`, so its beans stay in this client's Feign context. |
-| **`@ConfigurationProperties` record** | `config/ProducerClientProperties` | Type-safe `clients.producer.*` (base URL, bundle name, timeout with `@DefaultValue`); `@FeignClient(url = "${clients.producer.base-url}")` reads the URL. |
-| **`@RestControllerAdvice` → Problem Details** | `exception/UpstreamExceptionHandler` | Handshake / IO failures → `502`, upstream `404` → `404`, other upstream errors → `502`, all as RFC 9457 JSON. |
-| **Lombok** | `@RequiredArgsConstructor`, `@Slf4j` | No hand-written constructors or logger fields. |
+| **OpenFeign client** ([`@FeignClient`][FeignClient]) | `client/ProducerClient` | Declarative interface: one Spring MVC–annotated method per producer endpoint; Feign generates the implementation. |
+| **[`@EnableFeignClients(clients = ProducerClient.class)`][EnableFeignClients]** | `config/ProducerClientConfig` | Registers just this client. Kept off the application class so [`@WebMvcTest`][WebMvcTest] slices don't create Feign clients. |
+| **Per-client Feign configuration** | `config/ProducerFeignConfiguration` | [`feign.Client`][Client] bean: Feign's [`Http2Client`][Http2Client] over a JDK [`HttpClient`][HttpClient] that Boot's [`JdkHttpClientBuilder`][JdkHttpClientBuilder] builds from [`HttpClientSettings.ofSslBundle(...)`][HttpClientSettings]. It carries the client cert, trust, TLS protocols and connect timeout. [`Request.Options`][Request] sets the per-request timeouts. Not a [`@Configuration`][Configuration], so its beans stay in this client's Feign context. |
+| **[`@ConfigurationProperties`][ConfigurationProperties] record** | `config/ProducerClientProperties` | Type-safe `clients.producer.*` (base URL, bundle name, timeout with [`@DefaultValue`][DefaultValue]); `@FeignClient(url = "${clients.producer.base-url}")` reads the URL. |
+| **[`@RestControllerAdvice`][RestControllerAdvice] → Problem Details** | `exception/UpstreamExceptionHandler` | Handshake / IO failures → `502`, upstream `404` → `404`, other upstream errors → `502`, all as RFC 9457 JSON. |
+| **Lombok** | [`@RequiredArgsConstructor`][RequiredArgsConstructor], [`@Slf4j`][Slf4j] | No hand-written constructors or logger fields. |
 | **Records** | `Greeting`, `HelloResponse`, properties | Immutable DTOs. |
 | **DevTools** | root `pom.xml` (runtime, optional) | Auto-restart on recompile; not packaged into the jar. |
 | **Actuator `info` / `health`** | `management.*`, `info.app.*` | Includes the configured downstream URL. |
@@ -149,23 +149,23 @@ public class ProducerFeignConfiguration {        // deliberately not a @Configur
 }
 ```
 
-- **Why a custom `feign.Client`?** Spring Cloud OpenFeign 5.0 has no SSL-bundle support. Its only
+- **Why a custom [`feign.Client`][Client]?** Spring Cloud OpenFeign 5.0 has no SSL-bundle support. Its only
   TLS setting is `spring.cloud.openfeign.httpclient.disable-ssl-validation`. The client certificate
   therefore has to come from the `Client` bean.
-- **Why `JdkHttpClientBuilder`?** It's Spring Boot's own bundle-to-`HttpClient` mapping. It applies
+- **Why [`JdkHttpClientBuilder`][JdkHttpClientBuilder]?** It's Spring Boot's own bundle-to-[`HttpClient`][HttpClient] mapping. It applies
   the SSL context and the bundle's enabled protocols / ciphers, exactly as Boot does for its own
-  HTTP clients. `Http2Client` (from `feign-java11`) is Feign's transport for the JDK `HttpClient`.
+  HTTP clients. [`Http2Client`][Http2Client] (from `feign-java11`) is Feign's transport for the JDK `HttpClient`.
 - **Only a connect timeout on the settings.** `JdkHttpClientBuilder` rejects a read timeout
   (`'settings' must not have a 'readTimeout'`) because the JDK `HttpClient` has no client-wide one.
-  Feign's `Request.Options` supplies it per request instead.
-- **Retries:** Spring Cloud OpenFeign's default `Retryer` is `NEVER_RETRY`, so a failed handshake
+  Feign's [`Request.Options`][Request] supplies it per request instead.
+- **Retries:** Spring Cloud OpenFeign's default [`Retryer`][Retryer] is `NEVER_RETRY`, so a failed handshake
   is not retried.
 
 Hostname verification stays **on**: the producer cert's SAN must match the host in
 `clients.producer.base-url`.
 
 > Spring Cloud OpenFeign is feature-complete (maintenance mode). The Spring-native alternative is
-> an `@HttpExchange` interface backed by `RestClient`. Boot 4 configures those per group, SSL
+> an [`@HttpExchange`][HttpExchange] interface backed by [`RestClient`][RestClient]. Boot 4 configures those per group, SSL
 > bundle included, with `spring.http.serviceclient.<group>.ssl.bundle`; no custom client bean needed.
 
 <a id="api"></a>
@@ -200,8 +200,8 @@ Hostname verification stays **on**: the producer cert's SAN must match the host 
 
 | Upstream outcome | Exception | Consumer response |
 |---|---|---|
-| TLS handshake fails (untrusted producer cert, producer rejects our cert), connection refused, timeout | `feign.RetryableException` (Feign wraps the `IOException`) | `502` — `service-producer unreachable or TLS handshake failed` |
-| Producer `404` (unknown language) | `FeignException.NotFound` | `404` — `Greeting not found upstream` |
+| TLS handshake fails (untrusted producer cert, producer rejects our cert), connection refused, timeout | [`feign.RetryableException`][RetryableException] (Feign wraps the [`IOException`][IOException]) | `502` — `service-producer unreachable or TLS handshake failed` |
+| Producer `404` (unknown language) | [`FeignException.NotFound`][FeignException] | `404` — `Greeting not found upstream` |
 | Producer `403` or any other error | `FeignException` | `502` — `service-producer responded <status>`, e.g. `service-producer responded 403` |
 
 Every error body is `application/problem+json`, for example:
@@ -224,7 +224,7 @@ Every error body is `application/problem+json`, for example:
 |---|---|
 | `server.port` | `9443` |
 | `clients.producer.ssl-bundle` | `service-consumer` |
-| `clients.producer.timeout` | `5s`: connect timeout of the JDK `HttpClient` and Feign's per-request read timeout |
+| `clients.producer.timeout` | `5s`: connect timeout of the JDK [`HttpClient`][HttpClient] and Feign's per-request read timeout |
 
 <a id="running-locally"></a>
 ## <span style="color:hsl(200,80%,55%)">8. 🚀 Running locally</span>
@@ -265,13 +265,13 @@ Inbound HTTPS on `:9443` keeps working because the truststore is only used for o
 mvn -pl service-consumer verify
 ```
 
-`HelloControllerTest` (`@WebMvcTest`, `ProducerClient` mocked with `@MockitoBean`):
+`HelloControllerTest` ([`@WebMvcTest`][WebMvcTest], `ProducerClient` mocked with [`@MockitoBean`][MockitoBean]):
 
 | Test | Expected |
 |---|---|
 | `wrapsUpstreamGreeting` | `200`, upstream greeting wrapped with `consumer` field |
-| `handshakeFailureBecomesBadGateway` | `RetryableException` (cause `SSLHandshakeException`) → `502` problem detail |
-| `upstreamNotFoundPassesThrough` | `FeignException.NotFound` → `404` problem detail |
+| `handshakeFailureBecomesBadGateway` | [`RetryableException`][RetryableException] (cause [`SSLHandshakeException`][SSLHandshakeException]) → `502` problem detail |
+| `upstreamNotFoundPassesThrough` | [`FeignException.NotFound`][FeignException] → `404` problem detail |
 | `upstreamForbiddenBecomesBadGateway` | `FeignException.Forbidden` → `502`, `service-producer responded 403` |
 
 No automated test drives this module's Feign client + SSL bundle against a live producer. The mTLS
@@ -314,7 +314,7 @@ service-consumer
 - Replace `changeit`; inject store passwords from a secret manager.
 - Inbound `:9443` is one-way TLS. Add `server.ssl.client-auth: need` if callers of the consumer must also authenticate.
 - For real traffic, add circuit breaking with `spring.cloud.openfeign.circuitbreaker.enabled=true` plus a
-  Spring Cloud CircuitBreaker implementation (e.g. Resilience4j). Add an explicit `Retryer` only for idempotent calls.
+  Spring Cloud CircuitBreaker implementation (e.g. Resilience4j). Add an explicit [`Retryer`][Retryer] only for idempotent calls.
 
 <a id="qa"></a>
 ## <span style="color:hsl(190,80%,50%)">12. ❓ Q&A</span>
@@ -371,7 +371,7 @@ keytool -importcert -noprompt -alias mtls-demo-ca -file ca.crt \
 ```
 
 The consumer's truststore must hold the CA that signed the **producer's** server certificate,
-not `service-consumer.crt`. The JDK `HttpClient` also checks the producer certificate's SAN against the host in
+not `service-consumer.crt`. The JDK [`HttpClient`][HttpClient] also checks the producer certificate's SAN against the host in
 `clients.producer.base-url`. For more CAs, repeat `-importcert` with another alias.
 
 Ask the CA for extended key usage **`clientAuth`**. This module's certificate has
@@ -472,10 +472,10 @@ certificate (rekey); most CAs do that free of charge while the certificate is st
 What does Spring Boot do with them at startup, and what happens when an HTTPS request comes in?
 
 **A:** Spring Boot **reads** both files once, while the application starts, and turns them into two
-`SSLContext`s:
+[`SSLContext`][SSLContext]s:
 
 - one inside Tomcat, for inbound HTTPS on `:9443`;
-- one inside the Feign client's JDK `HttpClient`, for outbound calls to the producer.
+- one inside the Feign client's JDK [`HttpClient`][HttpClient], for outbound calls to the producer.
 
 From then on the stores are only **consulted during a TLS handshake**: the keystore through the key
 managers inside those contexts, the truststore through their trust managers. A request over an
@@ -502,16 +502,16 @@ flowchart TD
     S --> D["Started ConsumerApplication"]
 ```
 
-1. **Registration.** `SslAutoConfiguration` binds `spring.ssl.bundle.jks.service-consumer`: keystore,
-   truststore, `key.alias` and `options.enabled-protocols`. `SslPropertiesBundleRegistrar` then registers
-   it as a `PropertiesSslBundle` in `DefaultSslBundleRegistry`, the `SslBundles` bean. Nothing is read
-   yet. `JksSslStoreBundle` keeps each store behind a `SingletonSupplier`, which opens the file the
+1. **Registration.** [`SslAutoConfiguration`][SslAutoConfiguration] binds `spring.ssl.bundle.jks.service-consumer`: keystore,
+   truststore, `key.alias` and `options.enabled-protocols`. [`SslPropertiesBundleRegistrar`][SslPropertiesBundleRegistrar] then registers
+   it as a [`PropertiesSslBundle`][PropertiesSslBundle] in [`DefaultSslBundleRegistry`][DefaultSslBundleRegistry], the [`SslBundles`][SslBundles] bean. Nothing is read
+   yet. [`JksSslStoreBundle`][JksSslStoreBundle] keeps each store behind a [`SingletonSupplier`][SingletonSupplier], which opens the file the
    first time the store is asked for.
 2. **Tomcat is created.** This happens in `onRefresh`, before the application's own beans. Because of
-   `server.ssl.bundle: service-consumer`, `TomcatWebServerFactory` applies the bundle through
-   `SslConnectorCustomizer`, which calls `getKeyStore()` and `getTrustStore()`. **This is the moment
+   `server.ssl.bundle: service-consumer`, [`TomcatWebServerFactory`][TomcatWebServerFactory] applies the bundle through
+   [`SslConnectorCustomizer`][SslConnectorCustomizer], which calls `getKeyStore()` and `getTrustStore()`. **This is the moment
    both `.p12` files are read**, once. Tomcat receives:
-   - the two loaded `KeyStore` objects;
+   - the two loaded [`KeyStore`][KeyStore] objects;
    - the key alias and password;
    - the enabled protocols;
    - `certificateVerification = none`, because `server.ssl.client-auth` isn't set.
@@ -519,14 +519,14 @@ flowchart TD
    A wrong path or password fails right here, before anything else starts:
    `Could not load store: … Could not load store from 'file:/…'`.
 3. **The Feign client is built** during bean creation. `ProducerFeignConfiguration` fetches the
-   bundle from `SslBundles` and passes it to `JdkHttpClientBuilder`, which calls
-   `SslBundle.createSslContext()`. Behind that call, `DefaultSslManagerBundle`:
+   bundle from `SslBundles` and passes it to [`JdkHttpClientBuilder`][JdkHttpClientBuilder], which calls
+   [`SslBundle.createSslContext()`][SslBundle]. Behind that call, [`DefaultSslManagerBundle`][DefaultSslManagerBundle]:
    - checks that `key.alias` exists in the keystore;
-   - builds a `KeyManagerFactory` from the keystore, wrapped in Spring's `AliasKeyManagerFactory`;
-   - builds a PKIX `TrustManagerFactory` from the truststore;
-   - calls `SSLContext.init(keyManagers, trustManagers, null)`.
+   - builds a [`KeyManagerFactory`][KeyManagerFactory] from the keystore, wrapped in Spring's [`AliasKeyManagerFactory`][AliasKeyManagerFactory];
+   - builds a PKIX [`TrustManagerFactory`][TrustManagerFactory] from the truststore;
+   - calls [`SSLContext.init(keyManagers, trustManagers, null)`][SSLContext].
 
-   The context goes into `HttpClient.newBuilder().sslContext(...)`, together with `SSLParameters`
+   The context goes into [`HttpClient.newBuilder().sslContext(...)`][HttpClient], together with [`SSLParameters`][SSLParameters]
    carrying the enabled protocols. JSSE logs `found key for : service-consumer` and
    `adding as trusted certificates` on the `main` thread.
 4. **Tomcat starts** at the end of the refresh. It builds its own `SSLContext` from the `KeyStore`
@@ -571,15 +571,15 @@ sequenceDiagram
 ```
 
 **Inbound on `:9443`: keystore only.** Tomcat's NIO connector accepts the connection and runs the
-server side of the handshake on an `SSLEngine` from its `SSLContext`. Its key manager returns the
+server side of the handshake on an [`SSLEngine`][SSLEngine] from its [`SSLContext`][SSLContext]. Its key manager returns the
 configured alias (`matching alias: service-consumer`), and Tomcat sends that certificate chain and
 signs `CertificateVerify` with the private key. It sends no `CertificateRequest`, because
 `certificateVerification` is `none`, so the truststore stays idle. Only after the handshake does Tomcat
-decrypt the request and hand it to `DispatcherServlet`. That's why `:9443` keeps working in the
+decrypt the request and hand it to [`DispatcherServlet`][DispatcherServlet]. That's why `:9443` keeps working in the
 rogue-truststore test under [Running locally](#running-locally).
 
 **Outbound from Feign to the producer: both stores.** `HelloController` calls `ProducerClient`, and
-Feign's `Http2Client` passes the request to the JDK `HttpClient`. The client first looks for an open
+Feign's [`Http2Client`][Http2Client] passes the request to the JDK [`HttpClient`][HttpClient]. The client first looks for an open
 connection to `localhost:8443`. Only when there is none does it open one and run the client side of
 the handshake on the Feign `SSLContext`:
 
@@ -590,7 +590,7 @@ the handshake on the Feign `SSLContext`:
 2. **The producer's `CertificateRequest` is answered, and the keystore is used.** The producer runs
    with `client-auth: need`, and its request names the CAs it accepts
    (`CN=mTLS Demo Root CA, O=com.org`). The key manager picks a key whose certificate chains to one of
-   them. Spring's `AliasKeyManagerFactory` pins `key.alias` only in the server role; in the client role
+   them. Spring's [`AliasKeyManagerFactory`][AliasKeyManagerFactory] pins `key.alias` only in the server role; in the client role
    the JDK chooses by key type and issuer. With a single key entry, that is `service-consumer`
    (`matching alias: service-consumer`). The certificate chain is sent, and the private key signs
    `CertificateVerify`.
@@ -658,7 +658,52 @@ In Spring Boot, an SSL bundle may hold just one of the two stores:
 
 - **Truststore only:** gives an HTTP client trust in a private CA without presenting a client
   certificate.
-- **Keystore only:** trust falls back to the JDK's default truststore. `DefaultSslManagerBundle`
-  initialises the `TrustManagerFactory` with `null`, and `null` means the JDK default.
+- **Keystore only:** trust falls back to the JDK's default truststore. [`DefaultSslManagerBundle`][DefaultSslManagerBundle]
+  initialises the [`TrustManagerFactory`][TrustManagerFactory] with `null`, and `null` means the JDK default.
 - **Server side:** `server.ssl.bundle` needs the keystore. Add a truststore and
   `server.ssl.client-auth: need` only for mTLS.
+
+<!-- Library classes mentioned above, linked to their source at the versions this project builds with. -->
+
+[AliasKeyManagerFactory]: https://github.com/spring-projects/spring-boot/blob/v4.1.1/core/spring-boot/src/main/java/org/springframework/boot/ssl/AliasKeyManagerFactory.java
+[Client]: https://github.com/OpenFeign/feign/blob/13.6.1/core/src/main/java/feign/Client.java
+[Configuration]: https://github.com/spring-projects/spring-framework/blob/v7.0.9/spring-context/src/main/java/org/springframework/context/annotation/Configuration.java
+[ConfigurationProperties]: https://github.com/spring-projects/spring-boot/blob/v4.1.1/core/spring-boot/src/main/java/org/springframework/boot/context/properties/ConfigurationProperties.java
+[DefaultSslBundleRegistry]: https://github.com/spring-projects/spring-boot/blob/v4.1.1/core/spring-boot/src/main/java/org/springframework/boot/ssl/DefaultSslBundleRegistry.java
+[DefaultSslManagerBundle]: https://github.com/spring-projects/spring-boot/blob/v4.1.1/core/spring-boot/src/main/java/org/springframework/boot/ssl/DefaultSslManagerBundle.java
+[DefaultValue]: https://github.com/spring-projects/spring-boot/blob/v4.1.1/core/spring-boot/src/main/java/org/springframework/boot/context/properties/bind/DefaultValue.java
+[DispatcherServlet]: https://github.com/spring-projects/spring-framework/blob/v7.0.9/spring-webmvc/src/main/java/org/springframework/web/servlet/DispatcherServlet.java
+[EnableFeignClients]: https://github.com/spring-cloud/spring-cloud-openfeign/blob/v5.0.3/spring-cloud-openfeign-core/src/main/java/org/springframework/cloud/openfeign/EnableFeignClients.java
+[FeignClient]: https://github.com/spring-cloud/spring-cloud-openfeign/blob/v5.0.3/spring-cloud-openfeign-core/src/main/java/org/springframework/cloud/openfeign/FeignClient.java
+[FeignException]: https://github.com/OpenFeign/feign/blob/13.6.1/core/src/main/java/feign/FeignException.java
+[Http2Client]: https://github.com/OpenFeign/feign/blob/13.6.1/java11/src/main/java/feign/http2client/Http2Client.java
+[HttpClient]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.net.http/share/classes/java/net/http/HttpClient.java
+[HttpClientSettings]: https://github.com/spring-projects/spring-boot/blob/v4.1.1/module/spring-boot-http-client/src/main/java/org/springframework/boot/http/client/HttpClientSettings.java
+[HttpExchange]: https://github.com/spring-projects/spring-framework/blob/v7.0.9/spring-web/src/main/java/org/springframework/web/service/annotation/HttpExchange.java
+[IOException]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/java/io/IOException.java
+[JdkHttpClientBuilder]: https://github.com/spring-projects/spring-boot/blob/v4.1.1/module/spring-boot-http-client/src/main/java/org/springframework/boot/http/client/JdkHttpClientBuilder.java
+[JksSslStoreBundle]: https://github.com/spring-projects/spring-boot/blob/v4.1.1/core/spring-boot/src/main/java/org/springframework/boot/ssl/jks/JksSslStoreBundle.java
+[KeyManagerFactory]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/javax/net/ssl/KeyManagerFactory.java
+[KeyStore]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/java/security/KeyStore.java
+[MockitoBean]: https://github.com/spring-projects/spring-framework/blob/v7.0.9/spring-test/src/main/java/org/springframework/test/context/bean/override/mockito/MockitoBean.java
+[PropertiesSslBundle]: https://github.com/spring-projects/spring-boot/blob/v4.1.1/core/spring-boot-autoconfigure/src/main/java/org/springframework/boot/autoconfigure/ssl/PropertiesSslBundle.java
+[Request]: https://github.com/OpenFeign/feign/blob/13.6.1/core/src/main/java/feign/Request.java
+[RequiredArgsConstructor]: https://github.com/projectlombok/lombok/blob/v1.18.46/src/core/lombok/RequiredArgsConstructor.java
+[RestClient]: https://github.com/spring-projects/spring-framework/blob/v7.0.9/spring-web/src/main/java/org/springframework/web/client/RestClient.java
+[RestControllerAdvice]: https://github.com/spring-projects/spring-framework/blob/v7.0.9/spring-web/src/main/java/org/springframework/web/bind/annotation/RestControllerAdvice.java
+[RetryableException]: https://github.com/OpenFeign/feign/blob/13.6.1/core/src/main/java/feign/RetryableException.java
+[Retryer]: https://github.com/OpenFeign/feign/blob/13.6.1/core/src/main/java/feign/Retryer.java
+[SingletonSupplier]: https://github.com/spring-projects/spring-framework/blob/v7.0.9/spring-core/src/main/java/org/springframework/util/function/SingletonSupplier.java
+[Slf4j]: https://github.com/projectlombok/lombok/blob/v1.18.46/src/core/lombok/extern/slf4j/Slf4j.java
+[SslAutoConfiguration]: https://github.com/spring-projects/spring-boot/blob/v4.1.1/core/spring-boot-autoconfigure/src/main/java/org/springframework/boot/autoconfigure/ssl/SslAutoConfiguration.java
+[SslBundle]: https://github.com/spring-projects/spring-boot/blob/v4.1.1/core/spring-boot/src/main/java/org/springframework/boot/ssl/SslBundle.java
+[SslBundles]: https://github.com/spring-projects/spring-boot/blob/v4.1.1/core/spring-boot/src/main/java/org/springframework/boot/ssl/SslBundles.java
+[SslConnectorCustomizer]: https://github.com/spring-projects/spring-boot/blob/v4.1.1/module/spring-boot-tomcat/src/main/java/org/springframework/boot/tomcat/SslConnectorCustomizer.java
+[SSLContext]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/javax/net/ssl/SSLContext.java
+[SSLEngine]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/javax/net/ssl/SSLEngine.java
+[SSLHandshakeException]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/javax/net/ssl/SSLHandshakeException.java
+[SSLParameters]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/javax/net/ssl/SSLParameters.java
+[SslPropertiesBundleRegistrar]: https://github.com/spring-projects/spring-boot/blob/v4.1.1/core/spring-boot-autoconfigure/src/main/java/org/springframework/boot/autoconfigure/ssl/SslPropertiesBundleRegistrar.java
+[TomcatWebServerFactory]: https://github.com/spring-projects/spring-boot/blob/v4.1.1/module/spring-boot-tomcat/src/main/java/org/springframework/boot/tomcat/TomcatWebServerFactory.java
+[TrustManagerFactory]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/javax/net/ssl/TrustManagerFactory.java
+[WebMvcTest]: https://github.com/spring-projects/spring-boot/blob/v4.1.1/module/spring-boot-webmvc-test/src/main/java/org/springframework/boot/webmvc/test/autoconfigure/WebMvcTest.java

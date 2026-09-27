@@ -87,7 +87,7 @@ flowchart LR
 | Module | Role | Docs |
 |----|----|----|
 | [`service-producer`](service-producer) | mTLS server; reads greetings from PostgreSQL; CN allow-list; Jasypt-encrypted DB password | [README](service-producer/README.md) |
-| [`service-consumer`](service-consumer) | mTLS client; calls the producer with its client cert via an OpenFeign client (`@FeignClient`) on the SSL bundle | [README](service-consumer/README.md) |
+| [`service-consumer`](service-consumer) | mTLS client; calls the producer with its client cert via an OpenFeign client ([`@FeignClient`][FeignClient]) on the SSL bundle | [README](service-consumer/README.md) |
 | `docker-compose.yml` | PostgreSQL `19beta3` for the producer (host port 5434) | — |
 | `certs/out/` (git-ignored) | Shared root CA (`ca.key`, `ca.crt`) + PEM copies for `curl` / `openssl`. Written by the generate scripts, or extracted from the committed stores ([Quick start](#quick-start)) | — |
 | [`insomnia-certs/ca.crt`](insomnia-certs/ca.crt) | The demo CA certificate (public), for Insomnia's CA setting ([Insomnia collection](#insomnia)) | — |
@@ -425,7 +425,7 @@ flowchart LR
 | **Random** (ClientHello/ServerHello) | No | Fresh per handshake | Key schedule | Makes every session's keys unique; anti-replay | 32 B each |
 | **Ephemeral key** | **Yes** — discarded after use | Fresh per handshake | ECDHE | Forward secrecy | X25519 key share |
 
-All of these come from a **CSPRNG** (`SecureRandom` in Java, `/dev/urandom`-backed in OpenSSL).
+All of these come from a **CSPRNG** ([`SecureRandom`][SecureRandom] in Java, `/dev/urandom`-backed in OpenSSL).
 Weak randomness breaks everything above it.
 
 <a id="pki"></a>
@@ -524,7 +524,7 @@ Certificate
 <a id="path-validation"></a>
 ### <span style="color:hsl(165,80%,45%)">7.4 Certificate path validation (PKIX)</span>
 
-What the JSSE `TrustManager` does with the chain the peer sends (RFC 5280):
+What the JSSE [`TrustManager`][TrustManager] does with the chain the peer sends (RFC 5280):
 
 ```mermaid
 flowchart TB
@@ -618,7 +618,7 @@ Same file format (PKCS#12); different **contents** and **role**.
 | Answers | *"Who am I?"* | *"Whom do I trust?"* |
 | Contains | **PrivateKeyEntry**: own private key + own cert + chain (CA cert) | **trustedCertEntry**: CA certificate(s) only — no private keys |
 | Secret? | **Yes** — possession = ability to impersonate the service | No, but tamper-sensitive: adding a CA = trusting everything it signs |
-| JSSE component | `KeyManager` — picks cert, signs `CertificateVerify` | `TrustManager` — runs path validation (7.4) |
+| JSSE component | [`KeyManager`][KeyManager] — picks cert, signs `CertificateVerify` | [`TrustManager`][TrustManager] — runs path validation (7.4) |
 | Spring Boot | `spring.ssl.bundle.jks.<name>.keystore.*` + `key.alias` | `spring.ssl.bundle.jks.<name>.truststore.*` |
 
 ```mermaid
@@ -793,8 +793,8 @@ in, each layer removes its header and passes the rest up (**decapsulation**).
 
 | # | Layer | Job | Unit | Addressed by | In this call | Handled by |
 |---|---|---|---|---|---|---|
-| 4 | Application | What is said, and keeping it secret | HTTP message in TLS records | host name + path | HTTP/1.1 inside TLS 1.3 | The JVM: Spring MVC, Tomcat, JSSE `SSLEngine` |
-| 3 | Transport | Reliable, ordered bytes between two programs | Segment | Port | TCP, client port `43364` → `8443` | Linux kernel (TCP); Tomcat `NioEndpoint` owns the socket |
+| 4 | Application | What is said, and keeping it secret | HTTP message in TLS records | host name + path | HTTP/1.1 inside TLS 1.3 | The JVM: Spring MVC, Tomcat, JSSE [`SSLEngine`][SSLEngine] |
+| 3 | Transport | Reliable, ordered bytes between two programs | Segment | Port | TCP, client port `43364` → `8443` | Linux kernel (TCP); Tomcat [`NioEndpoint`][NioEndpoint] owns the socket |
 | 2 | Internet | Delivering packets between hosts | Packet | IP address | IPv6 `::1` → `::1` | Linux kernel (routing) |
 | 1 | Network access (network interface) | Moving frames across one link | Frame | MAC address | Loopback `lo` (one machine) | Kernel driver; network card and switch between machines |
 
@@ -870,9 +870,9 @@ What TLS changes, and what it doesn't:
   TCP connections with two TLS sessions. The consumer decrypts the first, handles the request in
   plaintext, and encrypts again for the second.
 
-Inside the JVM, Tomcat's `SecureNioChannel` passes socket bytes to JSSE's `SSLEngine` (`unwrap`
-decrypts, `wrap` encrypts). `Http11Processor` parses the decrypted HTTP, and Spring MVC calls the
-controller. For the consumer's outbound call, the JDK `HttpClient` behind Feign plays the client
+Inside the JVM, Tomcat's [`SecureNioChannel`][SecureNioChannel] passes socket bytes to JSSE's [`SSLEngine`][SSLEngine] (`unwrap`
+decrypts, `wrap` encrypts). [`Http11Processor`][Http11Processor] parses the decrypted HTTP, and Spring MVC calls the
+controller. For the consumer's outbound call, the JDK [`HttpClient`][HttpClient] behind Feign plays the client
 with its own `SSLEngine`.
 
 <a id="tcp-ip-transport"></a>
@@ -1005,7 +1005,7 @@ sequenceDiagram
 
 Curl prints the connection's addresses and ports only after the handshake, but the TCP
 connection has been open since `Trying`. The consumer's call to the producer goes through the
-same four layers, with the consumer's JDK `HttpClient` in curl's place.
+same four layers, with the consumer's JDK [`HttpClient`][HttpClient] in curl's place.
 
 <a id="tcp-ip-encapsulation"></a>
 ### <span style="color:hsl(0,70%,60%)">9.7 Encapsulation byte by byte</span>
@@ -1198,11 +1198,11 @@ that produced them — altering any message changes all keys.
 
 | Situation | Alert | What you see |
 |---|---|---|
-| Client sends no cert to producer | TLS 1.3: `certificate_required` (116) · TLS 1.2: `bad_certificate` (42) | `curl: (56) … tlsv13 alert certificate required` · Java `SSLHandshakeException` → consumer `502` |
+| Client sends no cert to producer | TLS 1.3: `certificate_required` (116) · TLS 1.2: `bad_certificate` (42) | `curl: (56) … tlsv13 alert certificate required` · Java [`SSLHandshakeException`][SSLHandshakeException] → consumer `502` |
 | Client cert not signed by the demo CA (e.g. self-signed rogue) | `certificate_unknown` (46), JSSE's alert for any PKIX failure | `curl: (56) … alert certificate unknown` |
 | Consumer truststore lacks producer's CA | consumer aborts with `certificate_unknown` (46) | `(certificate_unknown) PKIX path building failed … unable to find valid certification path to requested target` → `502` |
 | Host not in SAN | client aborts | `No subject alternative names matching IP address …` / `No name matching … found` |
-| Expired cert | `certificate_expired` (45) | `CertificateExpiredException` |
+| Expired cert | `certificate_expired` (45) | [`CertificateExpiredException`][CertificateExpiredException] |
 | TLS 1.1 offered | `protocol_version` (70) | `tlsv1 alert protocol version` |
 | Tampered record | `bad_record_mac` (20) | connection reset |
 | CA-trusted cert, CN not allow-listed | *(no alert — TLS succeeded)* | HTTP `403` |
@@ -1238,13 +1238,13 @@ sequenceDiagram
 | Layer | Mechanism | Config | Failure |
 |---|---|---|---|
 | Authentication (TLS) | Path validation against truststore | `server.ssl.client-auth: need`, truststore | Handshake alert |
-| Authorization (HTTP) | CN extracted via `LdapName` from `jakarta.servlet.request.X509Certificate` | `mtls.allowed-client-cns` | `403` |
+| Authorization (HTTP) | CN extracted via [`LdapName`][LdapName] from `jakarta.servlet.request.X509Certificate` | `mtls.allowed-client-cns` | `403` |
 
 <a id="spring-ssl-wiring"></a>
 ## <span style="color:hsl(30,80%,55%)">12. 🌱 How Spring Boot wires TLS (SSL bundles → JSSE)</span>
 
 Java's TLS implementation is **JSSE** (`javax.net.ssl`). Spring Boot's **SSL bundles** load the
-stores once and hand a ready `SSLContext` to both the embedded server and HTTP clients.
+stores once and hand a ready [`SSLContext`][SSLContext] to both the embedded server and HTTP clients.
 
 ```mermaid
 flowchart TB
@@ -1281,7 +1281,7 @@ sequenceDiagram
 
 `service-producer` starts the same way with bundle `service-producer`, `client-auth=need` and port
 `:8443`. It creates no Feign client. Spring Cloud OpenFeign itself has no SSL-bundle support, so the
-consumer supplies its own `feign.Client` ([consumer README](service-consumer/README.md#how-the-consumer-does-mutual-tls)).
+consumer supplies its own [`feign.Client`][Client] ([consumer README](service-consumer/README.md#how-the-consumer-does-mutual-tls)).
 
 | Config | Effect |
 |---|---|
@@ -1382,7 +1382,7 @@ java -cp ~/.m2/repository/org/jasypt/jasypt/1.9.3/jasypt-1.9.3.jar \
 
 - Pass only the text inside `ENC(` … `)`.
 - Algorithm, IV generator and iterations must match the ones used to encrypt (`jasypt.encryptor.*`
-  in the producer's `application.yml`). Any mismatch fails with `EncryptionOperationNotPossibleException`.
+  in the producer's `application.yml`). Any mismatch fails with [`EncryptionOperationNotPossibleException`][EncryptionOperationNotPossibleException].
 - The online Jasypt tools we tried (javainuse, rundevelrun, 8gwifi) can't decrypt this format:
   they assume a different algorithm or don't read the random IV from the value. Decrypt locally,
   and never paste a real master key into a website.
@@ -1423,7 +1423,7 @@ java -Djavax.net.debug=ssl:handshake -jar service-consumer/target/service-consum
 
 Insomnia's **Timeline** shows the client's side of a handshake ([19.5](#insomnia-troubleshooting)).
 For the server's side, turn on the JDK's TLS trace. Tomcat doesn't parse handshake messages: its
-connector hands the bytes to the JDK's JSSE `SSLEngine`. Tomcat's own loggers report at most that
+connector hands the bytes to the JDK's JSSE [`SSLEngine`][SSLEngine]. Tomcat's own loggers report at most that
 a handshake failed (first row of the table below). The messages themselves come from JSSE, and its
 switch is the JVM system property `javax.net.debug`. The JDK reads it once at startup, so it has
 no effect in `application.yml`, and changing it needs a restart.
@@ -1442,7 +1442,7 @@ In an IDE, add `-Djavax.net.debug=ssl:handshake` to the run configuration's VM o
 
 | Want | Set | Output |
 |---|---|---|
-| Failed handshakes only | `logging.level.org.apache.tomcat.util.net.NioEndpoint.handshake: debug` (a normal logging level; works in `application.yml`) | One entry per failed handshake: client IP and port, and the `SSLHandshakeException` |
+| Failed handshakes only | `logging.level.org.apache.tomcat.util.net.NioEndpoint.handshake: debug` (a normal logging level; works in `application.yml`) | One entry per failed handshake: client IP and port, and the [`SSLHandshakeException`][SSLHandshakeException] |
 | Short timeline | JVM `-Djavax.net.debug` (empty value) and `logging.level.javax.net.ssl: debug` | One line per handshake step, in the normal log format. The message contents are dropped |
 | Full trace (`-Ptls-debug`) | JVM `-Djavax.net.debug=ssl:handshake` | Every handshake message with all its fields, on stderr (not through Logback). About 850 lines per new connection, plus about 5,000 at startup |
 
@@ -1739,3 +1739,21 @@ only the CA certificate configured, it shows:
 The Timeline shows only the client's side. To see the producer's side of the same handshake,
 restart the producer with the `tls-debug` profile ([14.1](#tls-handshake-trace)). With no client
 certificate configured, its trace shows `Fatal (CERTIFICATE_REQUIRED): Empty client certificate chain`.
+
+<!-- Library classes mentioned above, linked to their source at the versions this project builds with. -->
+
+[CertificateExpiredException]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/java/security/cert/CertificateExpiredException.java
+[Client]: https://github.com/OpenFeign/feign/blob/13.6.1/core/src/main/java/feign/Client.java
+[EncryptionOperationNotPossibleException]: https://github.com/jasypt/jasypt/blob/jasypt-1.9.3/jasypt/src/main/java/org/jasypt/exceptions/EncryptionOperationNotPossibleException.java
+[FeignClient]: https://github.com/spring-cloud/spring-cloud-openfeign/blob/v5.0.3/spring-cloud-openfeign-core/src/main/java/org/springframework/cloud/openfeign/FeignClient.java
+[Http11Processor]: https://github.com/apache/tomcat/blob/11.0.24/java/org/apache/coyote/http11/Http11Processor.java
+[HttpClient]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.net.http/share/classes/java/net/http/HttpClient.java
+[KeyManager]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/javax/net/ssl/KeyManager.java
+[LdapName]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.naming/share/classes/javax/naming/ldap/LdapName.java
+[NioEndpoint]: https://github.com/apache/tomcat/blob/11.0.24/java/org/apache/tomcat/util/net/NioEndpoint.java
+[SecureNioChannel]: https://github.com/apache/tomcat/blob/11.0.24/java/org/apache/tomcat/util/net/SecureNioChannel.java
+[SecureRandom]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/java/security/SecureRandom.java
+[SSLContext]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/javax/net/ssl/SSLContext.java
+[SSLEngine]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/javax/net/ssl/SSLEngine.java
+[SSLHandshakeException]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/javax/net/ssl/SSLHandshakeException.java
+[TrustManager]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/javax/net/ssl/TrustManager.java
