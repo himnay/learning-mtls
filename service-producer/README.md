@@ -25,7 +25,7 @@
     - 13.1 [How do I create a keystore and a truststore from a CA-issued `.crt` file?](#qa-keystore-from-crt)
     - 13.2 [Does the CA email me the private key?](#qa-ca-private-key)
     - 13.3 [Does a service need a keystore if it only calls another service, or only serves one?](#qa-keystore-by-role)
-    - 13.4 [How can a service make HTTPS calls without a keystore?](#qa-https-without-keystore)
+    - 13.4 [How can a service make HTTPS calls without a keystore, and why does mTLS need one?](#qa-https-without-keystore)
     - 13.5 [Do two services calling each other over mTLS need to swap truststores, or can they share one?](#qa-shared-truststore)
     - 13.6 [What is a private key, how do you create one, and what's inside it?](#qa-private-key)
     - 13.7 [What is Venafi used for, and does it create the certificate, private key and public key?](#qa-venafi)
@@ -711,10 +711,10 @@ In Spring Boot, an SSL bundle may hold just one of the two stores:
   `server.ssl.client-auth: need` only for mTLS.
 
 <a id="qa-https-without-keystore"></a>
-### <span style="color:hsl(30,80%,55%)">13.4 How can a service make HTTPS calls without a keystore?</span>
+### <span style="color:hsl(30,80%,55%)">13.4 How can a service make HTTPS calls without a keystore, and why does mTLS need one?</span>
 
 **Q:** Why doesn't a service need a keystore if it has to make HTTPS calls? How can it build an
-[`SSLContext`][SSLContext] for an HTTPS call without one?
+[`SSLContext`][SSLContext] for an HTTPS call without one? And what changes with mTLS?
 
 **A:** Because in ordinary (one-way) TLS only the **server** proves who it is. A keystore holds a
 private key, and only the side that must prove its identity needs one. A client needs just two
@@ -798,10 +798,84 @@ spring:
             password: changeit
 ```
 
-**When a client *does* need a keystore:** only when the server demands a client certificate, which is
-mTLS. The producer here runs `client-auth: need`, so a client without a keystore sends that empty
-certificate list and the producer aborts the handshake with `certificate_required`
-(see [Running locally](#running-locally)).
+**In mTLS the answer flips: the calling service *must* have a keystore.** In mTLS the server also asks
+the client to prove who it is. Proving means the same thing for the client as for the server:
+presenting a certificate *and* signing the handshake with the matching private key. A truststore
+can't do that, because it holds only public CA certificates. So the calling service needs both
+stores, for two different jobs:
+
+| Store | Job in the mTLS handshake | Becomes, inside the `SSLContext` |
+|---|---|---|
+| **Truststore** (CA certificates) | Verify the *server's* certificate chain and hostname | trust managers, from `TrustManagerFactory` |
+| **Keystore** (own private key + certificate chain) | Answer the server's `CertificateRequest`: send the *client* certificate chain and sign `CertificateVerify` with the private key | key managers, from `KeyManagerFactory` |
+
+```mermaid
+sequenceDiagram
+    participant C as Client, keystore + truststore
+    participant S as Server, client-auth need
+    C->>S: ClientHello + ephemeral key share
+    S-->>C: ServerHello + ephemeral key share
+    Note over C,S: session keys from ECDHE, exactly as in one-way TLS
+    S-->>C: CertificateRequest listing the CAs it accepts
+    S-->>C: server Certificate + CertificateVerify
+    Note over C: TRUSTSTORE: server chain and SAN
+    S-->>C: Finished
+    Note over C: KEYSTORE: pick a key whose certificate<br/>chains to one of the accepted CAs
+    C->>S: client Certificate + CertificateVerify signed with the client's private key
+    Note over S: server truststore checks the client chain,<br/>then the app checks the identity (CN allow-list)
+    C->>S: Finished, then the encrypted HTTP request
+```
+
+The client's private key never leaves the client. `CertificateVerify` carries only a signature over the
+handshake so far. The server checks that signature with the public key from the client's certificate,
+which proves the client holds the matching private key. mTLS adds authentication of the client; the
+traffic is still encrypted with the same ECDHE session keys as in one-way TLS.
+
+**Building the `SSLContext` for mTLS.** It's the code above plus a `KeyManagerFactory`; the only
+change is the first argument of `init`:
+
+```java
+KeyStore keys = KeyStore.getInstance("PKCS12");
+try (InputStream in = Files.newInputStream(Path.of("service-consumer-keystore.p12"))) {
+    keys.load(in, "changeit".toCharArray());
+}
+KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+kmf.init(keys, "changeit".toCharArray());         // private key + certificate chain
+
+SSLContext ctx = SSLContext.getInstance("TLS");
+ctx.init(kmf.getKeyManagers(), tmf.getTrustManagers(), null);   // key managers + trust managers = mTLS
+HttpClient mtlsClient = HttpClient.newBuilder().sslContext(ctx).build();
+```
+
+Run on JDK 27 against the producer, which runs `client-auth: need`, the difference is exactly that
+argument:
+
+| `ctx.init(...)` | Result |
+|---|---|
+| `init(null, trust, null)` | `SSLHandshakeException: (certificate_required) Received fatal alert: certificate_required` |
+| `init(kmf.getKeyManagers(), trust, null)` | `200` with `callerCn: service-consumer` |
+
+**In Spring Boot you don't write that code.** A bundle that holds both stores does it:
+
+```yaml
+spring:
+  ssl:
+    bundle:
+      jks:
+        service-consumer:
+          key:
+            alias: service-consumer
+          keystore:                  # own key + certificate: makes this an mTLS client
+            location: classpath:ssl/service-consumer-keystore.p12
+            password: changeit
+          truststore:                # the CA that signed the server's certificate
+            location: classpath:ssl/truststore.p12
+            password: changeit
+```
+
+[`SslBundle`][SslBundle]`.createSslContext()` builds the key managers from the keystore and the trust
+managers from the truststore, then calls `SSLContext.init(keyManagers, trustManagers, null)`: the mTLS
+version of the code above. The consumer's `ProducerFeignConfiguration` hands that bundle to the JDK `HttpClient` through `HttpClientSettings.ofSslBundle(...)`. Step by step: the consumer README's [12.4](../service-consumer/README.md#qa-stores-at-startup) and [12.5](../service-consumer/README.md#qa-stores-per-request).
 
 <a id="qa-shared-truststore"></a>
 ### <span style="color:hsl(120,60%,45%)">13.5 Do two services calling each other over mTLS need to swap truststores, or can they share one?</span>
@@ -1178,6 +1252,7 @@ the private key ([13.2](#qa-ca-private-key)): a new CSR is one `openssl req` awa
 [ResourceAccessException]: https://github.com/spring-projects/spring-framework/blob/v7.0.9/spring-web/src/main/java/org/springframework/web/client/ResourceAccessException.java
 [RestClient]: https://github.com/spring-projects/spring-framework/blob/v7.0.9/spring-web/src/main/java/org/springframework/web/client/RestClient.java
 [Slf4j]: https://github.com/projectlombok/lombok/blob/v1.18.46/src/core/lombok/extern/slf4j/Slf4j.java
+[SslBundle]: https://github.com/spring-projects/spring-boot/blob/v4.1.1/core/spring-boot/src/main/java/org/springframework/boot/ssl/SslBundle.java
 [SslConnectorCustomizer]: https://github.com/spring-projects/spring-boot/blob/v4.1.1/module/spring-boot-tomcat/src/main/java/org/springframework/boot/tomcat/SslConnectorCustomizer.java
 [SSLContext]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/javax/net/ssl/SSLContext.java
 [SSLHandshakeException]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/javax/net/ssl/SSLHandshakeException.java
