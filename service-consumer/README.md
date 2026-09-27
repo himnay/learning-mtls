@@ -16,6 +16,7 @@
 12. ❓ [Q&A](#qa)
     - 12.1 [How do I create a keystore and a truststore from a CA-issued `.crt` file?](#qa-keystore-from-crt)
     - 12.2 [Does the CA email me the private key?](#qa-ca-private-key)
+    - 12.3 [When exactly are the keystore and the truststore used?](#qa-when-stores-used)
 
 <a id="stack"></a>
 ## <span style="color:hsl(278,80%,58%)">1. 🧰 Stack</span>
@@ -460,3 +461,90 @@ keytool -importkeystore -srckeystore download.pfx -srcstoretype PKCS12 \
 
 Not found anywhere? Then it is lost. Create a new key and CSR and ask the CA to reissue the
 certificate (rekey); most CAs do that free of charge while the certificate is still valid.
+
+<a id="qa-when-stores-used"></a>
+### <span style="color:hsl(300,70%,60%)">12.3 When exactly are the keystore and the truststore used?</span>
+
+**Q:** When exactly are the truststore and the keystore used in the service-consumer microservice?
+
+**A:** At two moments only: when the application **starts**, where both files are read, and during a
+**TLS handshake**, where their in-memory copies are consulted. A request that travels over an
+already-open TLS connection touches neither. Both stores belong to one SSL bundle,
+`service-consumer`, which plays two roles: TLS **server** on `:9443` and TLS **client** towards the
+producer.
+
+| When | Keystore `service-consumer-keystore.p12` | Truststore `truststore.p12` |
+|---|---|---|
+| Application startup | read into memory (twice) | read into memory (twice) |
+| A caller opens a connection to `:9443` | ✅ sends the `CN=service-consumer` certificate and signs the handshake | ❌ `:9443` asks callers for no certificate |
+| First call to the producer (new connection) | ✅ answers the producer's `CertificateRequest` | ✅ checks the producer's certificate and hostname |
+| Next calls over the same connection | ❌ | ❌ |
+| New connection that resumes the TLS session | ❌ | ❌ |
+
+The log messages quoted below come from a real run with
+`-Djavax.net.debug=ssl:handshake:keymanager:trustmanager` on the consumer.
+
+**1. Startup.** On the `main` thread, before `Started ConsumerApplication` is logged, Spring Boot
+creates two `SSLContext`s from the bundle: one for Tomcat's `:9443` connector and one for the JDK
+`HttpClient` that `ProducerFeignConfiguration` builds for Feign. Each reads both files
+(`found key for : service-consumer`, `adding as trusted certificates`). A wrong path or password
+therefore fails the startup, not the first request:
+
+```
+Caused by: java.lang.IllegalStateException: Could not load store from 'file:/nonexistent/truststore.p12'
+```
+
+From then on only the in-memory copies are used, so replacing a file on disk changes nothing until
+a restart. With `reload-on-update: true` and `file:` locations, Spring Boot would reload the bundle
+and Tomcat's `:9443` connector would pick it up, but the Feign client keeps the `SSLContext` it was
+built with.
+
+**2. A caller connects to `:9443`: keystore only.** Tomcat selects the key entry
+(`matching alias: service-consumer`), sends that certificate and signs the handshake with its private
+key. It sends no `CertificateRequest`, because `server.ssl.client-auth` isn't set, so the truststore
+plays no part in inbound calls. That's why `:9443` keeps working in the rogue-truststore test under
+[Running locally](#running-locally).
+
+**3. First call to the producer: the mTLS handshake.** Opening the connection to the producer uses
+both stores, in this order:
+
+```mermaid
+sequenceDiagram
+    participant C as service-consumer (JDK HttpClient)
+    participant P as service-producer :8443
+    C->>P: ClientHello
+    P-->>C: ServerHello, CertificateRequest
+    P-->>C: Certificate CN=service-producer
+    Note over C: TRUSTSTORE: does the chain end at the demo root CA?<br/>does the SAN match localhost?
+    P-->>C: CertificateVerify, Finished
+    Note over C: KEYSTORE: key entry service-consumer
+    C->>P: Certificate CN=service-consumer
+    C->>P: CertificateVerify signed with the private key, Finished
+    Note over P: chain check, then the CN allow-list
+    C->>P: GET /api/v1/greetings/... (encrypted)
+```
+
+1. The producer's `Certificate` message is checked against the **truststore** the moment it arrives
+   (`Found trusted certificate`), together with the hostname check against its SAN.
+2. After the producer's `Finished`, the **keystore** answers the `CertificateRequest`. Spring Boot's
+   key manager (`AliasKeyManagerFactory`, pinned to `key.alias: service-consumer`) supplies the
+   certificate chain, and the private key signs `CertificateVerify`, proving the consumer owns that
+   certificate.
+3. Only then does the first HTTP request leave the consumer.
+
+**4. Every call after that: neither store.**
+
+- The JDK `HttpClient` keeps the connection in its pool and Feign reuses it, so a call made soon after
+  the previous one needs no handshake at all (in the test run, the second call opened no connection).
+  The pool drops a connection after 30 s without use (`jdk.httpclient.keepalive.timeout`, JDK 25
+  default); a call 50 s after the previous one needed a new connection.
+- When a new connection is needed, the client resumes the TLS 1.3 session with the ticket it got
+  from the first handshake (`Try resuming session`, then
+  `Found resumable session. Preparing PSK message.`). No certificate travels in either direction and
+  neither store is consulted, yet the producer still reports `callerCn: service-consumer`, because the
+  resumed session carries the certificate from the original handshake.
+- Both stores come back into play only for a **full** handshake: after either service restarts, or
+  once the session ticket expires.
+
+How to produce such a trace: [root README — TLS handshake trace](../README.md#tls-handshake-trace).
+Every handshake message in detail: [root README — the mTLS handshake step by step](../README.md#the-mtls-handshake).
