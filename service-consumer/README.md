@@ -17,9 +17,9 @@
     - 12.1 [How do I create a keystore and a truststore from a CA-issued `.crt` file?](#qa-keystore-from-crt)
     - 12.2 [Does the CA email me the private key?](#qa-ca-private-key)
     - 12.3 [When exactly are the keystore and the truststore used?](#qa-when-stores-used)
-        - [What Spring Boot does at startup](#qa-stores-at-startup)
-        - [What happens when an HTTPS request comes in](#qa-stores-per-request)
-    - 12.4 [Does a service need a keystore if it only calls another service, or only serves one?](#qa-keystore-by-role)
+    - 12.4 [What Spring Boot does at startup](#qa-stores-at-startup)
+    - 12.5 [What happens when an HTTPS request comes in](#qa-stores-per-request)
+    - 12.6 [Does a service need a keystore if it only calls another service, or only serves one?](#qa-keystore-by-role)
 
 <a id="stack"></a>
 ## <span style="color:hsl(278,80%,58%)">1. 🧰 Stack</span>
@@ -491,7 +491,7 @@ signs the handshake, and the traffic is encrypted with session keys that the han
 | New connection that resumes the TLS session | ❌ | ❌ |
 
 <a id="qa-stores-at-startup"></a>
-#### What Spring Boot does at startup
+### <span style="color:hsl(45,80%,50%)">12.4 What Spring Boot does at startup</span>
 
 ```mermaid
 flowchart TD
@@ -540,7 +540,7 @@ pushes it to Tomcat (`SslConnectorCustomizer.update`). The Feign `HttpClient`, h
 `SSLContext` it was built with.
 
 <a id="qa-stores-per-request"></a>
-#### What happens when an HTTPS request comes in
+### <span style="color:hsl(260,60%,65%)">12.5 What happens when an HTTPS request comes in</span>
 
 ```mermaid
 sequenceDiagram
@@ -618,7 +618,7 @@ the Spring Boot 4.1.1 and Tomcat 11.0.24 sources. How to produce such a trace:
 detail: [root README — the mTLS handshake step by step](../README.md#the-mtls-handshake).
 
 <a id="qa-keystore-by-role"></a>
-### <span style="color:hsl(165,80%,45%)">12.4 Does a service need a keystore if it only calls another service, or only serves one?</span>
+### <span style="color:hsl(165,80%,45%)">12.6 Does a service need a keystore if it only calls another service, or only serves one?</span>
 
 **Q:** Does a service need a keystore if it only consumes an external service but doesn't expose
 any REST API, or the other way round?
