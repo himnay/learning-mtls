@@ -25,6 +25,7 @@
     - 13.1 [How do I create a keystore and a truststore from a CA-issued `.crt` file?](#qa-keystore-from-crt)
     - 13.2 [Does the CA email me the private key?](#qa-ca-private-key)
     - 13.3 [Does a service need a keystore if it only calls another service, or only serves one?](#qa-keystore-by-role)
+    - 13.4 [How can a service make HTTPS calls without a keystore?](#qa-https-without-keystore)
 
 <a id="stack"></a>
 ## <span style="color:hsl(278,80%,58%)">1. 🧰 Stack</span>
@@ -691,6 +692,99 @@ In Spring Boot, an SSL bundle may hold just one of the two stores:
 - **Server side:** `server.ssl.bundle` needs the keystore. Add a truststore and
   `server.ssl.client-auth: need` only for mTLS.
 
+<a id="qa-https-without-keystore"></a>
+### <span style="color:hsl(30,80%,55%)">13.4 How can a service make HTTPS calls without a keystore?</span>
+
+**Q:** Why doesn't a service need a keystore if it has to make HTTPS calls? How can it build an
+[`SSLContext`][SSLContext] for an HTTPS call without one?
+
+**A:** Because in ordinary (one-way) TLS only the **server** proves who it is. A keystore holds a
+private key, and only the side that must prove its identity needs one. A client needs just two
+things, and neither comes from a keystore:
+
+1. **Trust anchors, to check the server.** The server sends its certificate chain and signs the
+   handshake (`CertificateVerify`) with its private key. The client checks that the chain ends at a CA
+   it trusts, and that the certificate covers the host it dialled. That takes a **truststore**, which
+   holds only public CA certificates. The JDK ships one: `$JAVA_HOME/lib/security/cacerts`, a
+   password-less PKCS#12 file with 111 public CAs in JDK 27 and no private keys.
+2. **Session keys, to encrypt the traffic.** These are not stored anywhere. Every handshake runs an
+   ephemeral key exchange (X25519, a form of ECDHE). Each side creates a throwaway key pair in memory,
+   they swap the public halves in `ClientHello` and `ServerHello`, and both derive the same secret.
+   So the client takes part in the encryption without owning any long-term key. A keystore's private
+   key only ever *signs* the handshake; it never encrypts the traffic.
+
+```mermaid
+sequenceDiagram
+    participant C as Client, no keystore
+    participant S as Server, with keystore
+    C->>S: ClientHello + ephemeral X25519 public key
+    S-->>C: ServerHello + ephemeral X25519 public key
+    Note over C,S: both derive the same session keys (ECDHE)
+    S-->>C: Certificate chain + CertificateVerify signed with the server's private key
+    Note over C: TRUSTSTORE: does the chain end at a trusted CA?<br/>does the SAN cover the host?
+    S-->>C: Finished
+    C->>S: Finished, then the encrypted HTTP request
+```
+
+**How the `SSLContext` is built without one.** `SSLContext.init(keyManagers, trustManagers, random)`
+accepts `null` key managers. With no key managers the client simply has no certificate to offer. If
+a server asks for one (`CertificateRequest`), the client answers with an empty certificate list.
+
+```java
+// 1. Zero configuration: the JDK's default SSLContext has no key managers
+//    (javax.net.ssl.keyStore is not set) and trusts the CAs in cacerts.
+HttpClient client = HttpClient.newHttpClient();
+
+// 2. Explicit: trust a private CA, still without a keystore
+KeyStore trust = KeyStore.getInstance("PKCS12");
+try (InputStream in = Files.newInputStream(Path.of("truststore.p12"))) {
+    trust.load(in, "changeit".toCharArray());
+}
+TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+tmf.init(trust);                                 // tmf.init((KeyStore) null) would mean the JDK's cacerts
+SSLContext ctx = SSLContext.getInstance("TLS");
+ctx.init(null, tmf.getTrustManagers(), null);    // null key managers: no client certificate
+HttpClient privateCaClient = HttpClient.newBuilder().sslContext(ctx).build();
+```
+
+Both variants were run on JDK 27 against `https://api.github.com`. Each gave `HTTP 200`, `TLSv1.3`,
+`TLS_AES_128_GCM_SHA256` and *client certificate sent = false*. GitHub's certificate
+(`CN=*.github.com`) is issued by Sectigo, one of the CAs in `cacerts`.
+
+The classes in that code:
+
+- [`HttpClient`][HttpClient]: the JDK's HTTP client, which takes the `SSLContext`.
+- [`KeyStore`][KeyStore]: loads the `.p12` file, here holding only the CA certificate.
+- [`TrustManagerFactory`][TrustManagerFactory]: turns those CA certificates into trust managers,
+  which check the server.
+- [`KeyManagerFactory`][KeyManagerFactory]: turns a keystore's private key into key managers,
+  which present *our* certificate. This is the part a client without a keystore leaves out.
+
+**In Spring Boot:**
+
+- **Calling a public HTTPS API needs no SSL configuration at all.** [`RestClient`][RestClient], Feign
+  and the JDK `HttpClient` fall back to the JDK's default trust store.
+- **For a private CA**, declare a bundle with only a truststore and hand it to the client, e.g. with
+  [`HttpClientSettings`][HttpClientSettings]`.ofSslBundle(...)`, as this project does.
+  [`DefaultSslManagerBundle`][DefaultSslManagerBundle] then initialises the `KeyManagerFactory` without
+  a keystore, so there is no client certificate to send.
+
+```yaml
+spring:
+  ssl:
+    bundle:
+      jks:
+        partner-api:
+          truststore:                 # no keystore section
+            location: classpath:ssl/partner-ca.p12
+            password: changeit
+```
+
+**When a client *does* need a keystore:** only when the server demands a client certificate, which is
+mTLS. The producer here runs `client-auth: need`, so a client without a keystore sends that empty
+certificate list and the producer aborts the handshake with `certificate_required`
+(see [Running locally](#running-locally)).
+
 <!-- Library classes mentioned above, linked to their source at the versions this project builds with. -->
 
 [ConfigurationProperties]: https://github.com/spring-projects/spring-boot/blob/v4.1.1/core/spring-boot/src/main/java/org/springframework/boot/context/properties/ConfigurationProperties.java
@@ -701,12 +795,18 @@ In Spring Boot, an SSL bundle may hold just one of the two stores:
 [EncryptablePropertyDetector]: https://github.com/ulisesbocchio/jasypt-spring-boot/blob/jasypt-spring-boot-parent-4.0.4/jasypt-spring-boot/src/main/java/com/ulisesbocchio/jasyptspringboot/EncryptablePropertyDetector.java
 [EncryptablePropertyResolver]: https://github.com/ulisesbocchio/jasypt-spring-boot/blob/jasypt-spring-boot-parent-4.0.4/jasypt-spring-boot/src/main/java/com/ulisesbocchio/jasyptspringboot/EncryptablePropertyResolver.java
 [Environment]: https://github.com/spring-projects/spring-framework/blob/v7.0.9/spring-core/src/main/java/org/springframework/core/env/Environment.java
+[HttpClient]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.net.http/share/classes/java/net/http/HttpClient.java
+[HttpClientSettings]: https://github.com/spring-projects/spring-boot/blob/v4.1.1/module/spring-boot-http-client/src/main/java/org/springframework/boot/http/client/HttpClientSettings.java
+[KeyManagerFactory]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/javax/net/ssl/KeyManagerFactory.java
+[KeyStore]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/java/security/KeyStore.java
 [LdapName]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.naming/share/classes/javax/naming/ldap/LdapName.java
 [PropertySource]: https://github.com/spring-projects/spring-framework/blob/v7.0.9/spring-core/src/main/java/org/springframework/core/env/PropertySource.java
 [RandomIvGenerator]: https://github.com/jasypt/jasypt/blob/jasypt-1.9.3/jasypt/src/main/java/org/jasypt/iv/RandomIvGenerator.java
 [RequiredArgsConstructor]: https://github.com/projectlombok/lombok/blob/v1.18.46/src/core/lombok/RequiredArgsConstructor.java
 [ResourceAccessException]: https://github.com/spring-projects/spring-framework/blob/v7.0.9/spring-web/src/main/java/org/springframework/web/client/ResourceAccessException.java
+[RestClient]: https://github.com/spring-projects/spring-framework/blob/v7.0.9/spring-web/src/main/java/org/springframework/web/client/RestClient.java
 [Slf4j]: https://github.com/projectlombok/lombok/blob/v1.18.46/src/core/lombok/extern/slf4j/Slf4j.java
+[SSLContext]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/javax/net/ssl/SSLContext.java
 [SSLHandshakeException]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/javax/net/ssl/SSLHandshakeException.java
 [StringEncryptor]: https://github.com/jasypt/jasypt/blob/jasypt-1.9.3/jasypt/src/main/java/org/jasypt/encryption/StringEncryptor.java
 [TrustManagerFactory]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/javax/net/ssl/TrustManagerFactory.java
