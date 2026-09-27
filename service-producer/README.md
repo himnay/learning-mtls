@@ -28,6 +28,8 @@
     - 13.4 [How can a service make HTTPS calls without a keystore?](#qa-https-without-keystore)
     - 13.5 [Do two services calling each other over mTLS need to swap truststores, or can they share one?](#qa-shared-truststore)
     - 13.6 [What is a private key, how do you create one, and what's inside it?](#qa-private-key)
+    - 13.7 [What is Venafi used for, and does it create the certificate, private key and public key?](#qa-venafi)
+    - 13.8 [What is a CSR, in detail?](#qa-csr)
 
 <a id="stack"></a>
 ## <span style="color:hsl(278,80%,58%)">1. 🧰 Stack</span>
@@ -971,6 +973,175 @@ Once `service-producer.key` is folded into `service-producer-keystore.p12`
 `PrivateKeyEntry` — just encrypted at rest with the store password instead of living in a plaintext
 `.key` file. `keytool -list -v` names the entry and shows the certificate; it never prints the
 private fields above.
+
+<a id="qa-venafi"></a>
+### <span style="color:hsl(340,75%,58%)">13.7 What is Venafi used for, and does it create the certificate, private key and public key?</span>
+
+**Q:** My company uses Venafi. What is it used for, and does it create the digital certificate, the
+private key and the public key?
+
+**A:**
+
+**What Venafi is for.** Venafi (Machine Identity Management / Certificate Lifecycle Management —
+part of CyberArk since 2024) is the enterprise layer that sits **in front of** the CAs and automates
+everything `generate-certs.sh` does by hand here, across every certificate the company owns instead
+of three demo ones:
+
+| Function | What it replaces in this repo |
+|---|---|
+| **Discovery** — scans the network, cloud accounts and Kubernetes clusters for every certificate in use, including ones nobody is tracking | Knowing `service-producer-keystore.p12` exists and expires in 825 days ([4.1](#how-mutual-tls-is-enforced)) |
+| **Enrollment** — builds/collects a CSR and submits it to whichever CA policy points at: a public CA (DigiCert, Sectigo, Entrust…), an internal CA (Microsoft ADCS, EJBCA), or a Venafi-hosted subordinate CA | Running `openssl req -newkey rsa:2048 …` and signing it with `ca.key` ([13.2](#qa-ca-private-key)) |
+| **Policy enforcement** — blocks requests using weak key sizes/algorithms, wrong SANs, disallowed CAs, or too-long validity | Nothing enforces this here — the script just uses whatever's hardcoded |
+| **Renewal & installation** — renews before expiry and pushes the new cert into the target keystore/load balancer/server config, often restarting the service | Re-running `generate-certs.sh` and restarting the app by hand |
+| **Revocation & inventory reporting** | Not needed at demo scale |
+
+Products: **Trust Protection Platform (TPP)**, self-hosted, and **Venafi Control Plane / Venafi as a
+Service (VaaS)**, SaaS. A separate product, **CodeSign Protect**, does the same job for code-signing
+keys/certificates rather than TLS ones.
+
+**Does Venafi create the digital certificate?** No — Venafi is, in the overwhelming majority of
+deployments, not itself a CA. It automates the exact CSR → CA → certificate flow from
+[13.2](#qa-ca-private-key), fanned out across every CA the company uses instead of one demo
+`ca.key`. The CA — public or internal — still does the actual signing; Venafi's job is getting the
+right CSR to the right CA under the right policy, and making sure what comes back is installed and
+renewed everywhere it's needed.
+
+**Does Venafi create the private and public key?** Depends on the enrollment mode — the same two
+options already described generically in [13.2](#qa-ca-private-key):
+
+| Mode | Who generates the key pair | Where the private key ends up |
+|---|---|---|
+| **Local generation** (default for most integrations — an installed Venafi agent, or the requesting software/appliance itself) | The endpoint | Never leaves it — only the CSR (public key + subject, [13.6](#qa-private-key)) goes to Venafi and onward to the CA, same as `service-producer.key` in this repo |
+| **Central generation** (for devices that can't build their own CSR — older load balancers, network appliances) | Venafi Platform itself | Generated centrally, delivered to the endpoint (often a password-protected PKCS#12/PFX), and optionally escrowed in Venafi's encrypted vault for recovery |
+
+Local generation is the safer default, for the same reason [13.2](#qa-ca-private-key) flags CA-side
+key generation as needing care: whoever generates the key has, for at least a moment, seen it. Once
+a certificate and key exist, Venafi's integrations can also do the packaging step this repo does by
+hand with `openssl pkcs12 -export` ([13.1](#qa-keystore-from-crt)) — installing straight into a Java
+keystore, IIS, F5, NetScaler, etc.
+
+For Kubernetes-native issuance, Venafi ships a [cert-manager](https://cert-manager.io/) issuer, so a
+cluster workload gets the same enroll/renew/install automation through a `Certificate` custom
+resource instead of a shell script — one more option alongside cert-manager, Vault PKI and
+SPIFFE/SPIRE already mentioned in [Production notes](#production-notes).
+
+<a id="qa-csr"></a>
+### <span style="color:hsl(160,70%,40%)">13.8 What is a CSR, in detail?</span>
+
+**Q:** What exactly is a CSR (Certificate Signing Request) — what's inside it, and how does a CA
+use it?
+
+**A:** A CSR is the middle step between the key pair ([13.6](#qa-private-key)) and the signed
+certificate: a small message that says *"here is my public key and identity, and I can prove I hold
+the matching private key."* It's defined by **PKCS#10**, and every `.csr` file `generate-certs.sh`
+creates is one.
+
+**What's inside it.** Like the private key ([13.6](#qa-private-key)), it's an ASN.1 structure,
+visible with `openssl req -in service-producer.csr -text -noout`:
+
+| Part | Contents | Signed? |
+|---|---|---|
+| `CertificationRequestInfo` | Version, **Subject** (`CN=service-producer, O=com.org`), **Subject Public Key Info** (the public key: modulus + `65537`, [13.6](#qa-private-key)), and **Attributes** — extensions the requester would like in the final cert, typically `subjectAltName` | This is what gets signed |
+| `signatureAlgorithm` | e.g. `sha256WithRSAEncryption` | — |
+| `signature` | A signature **over the `CertificationRequestInfo` bytes, made with the private key** | The proof |
+
+That signature is the entire point. The CA (or, here, the script standing in for one) recomputes the
+hash of `CertificationRequestInfo` and checks it against the enclosed public key. If it matches,
+whoever submitted the CSR must hold the private key paired with that public key — without the
+private key ever being sent. `openssl req -verify` performs exactly this check:
+
+```bash
+$ openssl req -in service-producer.csr -verify -noout
+Certificate request self-signature verify OK
+```
+
+("Self-signature" here means the CSR is signed with its *own* subject's key — not to be confused
+with a self-signed *certificate*, where issuer = subject.)
+
+**What this repo's own CSR looks like.** `generate-certs.sh`'s leaf command has no `-addext`:
+
+```bash
+openssl req -newkey rsa:2048 -nodes -sha256 \
+  -keyout "${name}.key" -out "${name}.csr" \
+  -subj "/CN=${name}/O=com.org"
+```
+
+so its `Attributes` come back empty:
+
+```
+Certificate Request:
+    Data:
+        Version: 1 (0x0)
+        Subject: CN=service-producer, O=com.org
+        Subject Public Key Info:
+            Public Key Algorithm: rsaEncryption
+                Public-Key: (2048 bit)
+                Modulus:
+                    00:b2:99:15:d0:fe:95:a9:69:57:a5:70:2d:f0:13:
+                    ... (2048 bits, same shape as the private key's modulus, 13.6)
+                Exponent: 65537 (0x10001)
+        Attributes:
+            (none)
+            Requested Extensions:
+    Signature Algorithm: sha256WithRSAEncryption
+    Signature Value:
+        8d:c7:3d:57:f1:08:89:83:d3:6d:38:f9:48:17:46:a2:59:fa:
+        ...
+```
+
+(Run against a throwaway CSR, OpenSSL 3.6.3 — only the shape matters, not the bytes.)
+
+That's fine here because the script re-signs the CSR itself right after
+(`openssl x509 -req … -extfile "${name}.ext"`, [4.1](#how-mutual-tls-is-enforced)), supplying the
+SAN/`keyUsage`/`extendedKeyUsage` separately from that `.ext` file — `openssl x509 -req` doesn't
+carry a CSR's own requested extensions into the certificate unless told to. A CSR headed to a
+**real** CA should request the SAN itself, since the CA decides whether to honour it. That's why
+[13.2](#qa-ca-private-key)'s example adds it explicitly:
+
+```bash
+openssl req -new -newkey rsa:2048 -nodes -sha256 \
+  -keyout service-producer.key -out service-producer.csr \
+  -subj "/CN=service-producer/O=com.org" \
+  -addext "subjectAltName=DNS:service-producer,DNS:localhost,IP:127.0.0.1"
+```
+
+which fills the same `Attributes` section in instead of leaving it empty:
+
+```
+        Attributes:
+            Requested Extensions:
+                X509v3 Subject Alternative Name:
+                    DNS:service-producer, DNS:localhost, IP Address:127.0.0.1
+```
+
+Since modern clients (JDK, browsers) reject a certificate with no SAN at all for hostname checks, a
+CSR sent to a real CA should always request one — even though the CA may still override it with its
+own policy.
+
+**On the wire / on disk**, a CSR is Base64(DER) between markers, the same shape as the private key
+([13.6](#qa-private-key)) but with its own header:
+
+```
+-----BEGIN CERTIFICATE REQUEST-----
+MIICsTCCAZkCAQAwLTEZMBcGA1UEAwwQc2VydmljZS1wcm9kdWNlcjEQMA4GA1UE
+...
+-----END CERTIFICATE REQUEST-----
+```
+
+**What the CA actually does with it** (`generate-certs.sh` plays the CA role for its leaf certs):
+
+1. Verify the signature against the enclosed public key — proof of possession, above.
+2. Verify identity: domain control validation for a public CA, an internal identity check for a
+   private CA or a Venafi-mediated request ([13.7](#qa-venafi)), or — here — nothing at all, since
+   the script trusts whatever `-subj` it was given.
+3. Apply its **own** policy for what the issued certificate actually gets (SAN, validity period, key
+   usage) — a requested extension in the CSR is a request, not a guarantee.
+4. Sign a new structure, the certificate: the CSR's subject and public key, plus the CA's chosen
+   extensions and validity, signed with the **CA's** private key. That's `service-producer.crt`.
+
+The CSR itself is then disposable — `generate-certs.sh` deletes it (`rm -f "${name}.csr" …`) right
+after signing, since nothing past this point needs it again. Losing it costs nothing, unlike losing
+the private key ([13.2](#qa-ca-private-key)): a new CSR is one `openssl req` away, from the same key.
 
 <!-- Library classes mentioned above, linked to their source at the versions this project builds with. -->
 
