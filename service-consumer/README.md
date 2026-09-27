@@ -17,6 +17,8 @@
     - 12.1 [How do I create a keystore and a truststore from a CA-issued `.crt` file?](#qa-keystore-from-crt)
     - 12.2 [Does the CA email me the private key?](#qa-ca-private-key)
     - 12.3 [When exactly are the keystore and the truststore used?](#qa-when-stores-used)
+        - [What Spring Boot does at startup](#qa-stores-at-startup)
+        - [What happens when an HTTPS request comes in](#qa-stores-per-request)
 
 <a id="stack"></a>
 ## <span style="color:hsl(278,80%,58%)">1. 🧰 Stack</span>
@@ -466,85 +468,150 @@ certificate (rekey); most CAs do that free of charge while the certificate is st
 ### <span style="color:hsl(300,70%,60%)">12.3 When exactly are the keystore and the truststore used?</span>
 
 **Q:** When exactly are the truststore and the keystore used in the service-consumer microservice?
+What does Spring Boot do with them at startup, and what happens when an HTTPS request comes in?
 
-**A:** At two moments only: when the application **starts**, where both files are read, and during a
-**TLS handshake**, where their in-memory copies are consulted. A request that travels over an
-already-open TLS connection touches neither. Both stores belong to one SSL bundle,
-`service-consumer`, which plays two roles: TLS **server** on `:9443` and TLS **client** towards the
-producer.
+**A:** Spring Boot **reads** both files once, while the application starts, and turns them into two
+`SSLContext`s:
+
+- one inside Tomcat, for inbound HTTPS on `:9443`;
+- one inside the Feign client's JDK `HttpClient`, for outbound calls to the producer.
+
+From then on the stores are only **consulted during a TLS handshake**: the keystore through the key
+managers inside those contexts, the truststore through their trust managers. A request over an
+already-open connection touches neither. Neither store encrypts any data either: the private key only
+signs the handshake, and the traffic is encrypted with session keys that the handshake agrees on.
 
 | When | Keystore `service-consumer-keystore.p12` | Truststore `truststore.p12` |
 |---|---|---|
-| Application startup | read into memory (twice) | read into memory (twice) |
-| A caller opens a connection to `:9443` | ✅ sends the `CN=service-consumer` certificate and signs the handshake | ❌ `:9443` asks callers for no certificate |
-| First call to the producer (new connection) | ✅ answers the producer's `CertificateRequest` | ✅ checks the producer's certificate and hostname |
+| Startup | read once, then built into both `SSLContext`s | read once, then built into both `SSLContext`s |
+| A caller opens a connection to `:9443` | ✅ Tomcat sends the `CN=service-consumer` certificate and signs the handshake | ❌ loaded in Tomcat but never asked: `:9443` requests no client certificate |
+| First call to the producer (new connection) | ✅ answers the producer's `CertificateRequest` | ✅ checks the producer's certificate chain and hostname |
 | Next calls over the same connection | ❌ | ❌ |
 | New connection that resumes the TLS session | ❌ | ❌ |
 
-The log messages quoted below come from a real run with
-`-Djavax.net.debug=ssl:handshake:keymanager:trustmanager` on the consumer.
+<a id="qa-stores-at-startup"></a>
+#### What Spring Boot does at startup
 
-**1. Startup.** On the `main` thread, before `Started ConsumerApplication` is logged, Spring Boot
-creates two `SSLContext`s from the bundle: one for Tomcat's `:9443` connector and one for the JDK
-`HttpClient` that `ProducerFeignConfiguration` builds for Feign. Each reads both files
-(`found key for : service-consumer`, `adding as trusted certificates`). A wrong path or password
-therefore fails the startup, not the first request:
-
+```mermaid
+flowchart TD
+    Y["application.yml<br/>spring.ssl.bundle.jks.service-consumer"] --> R["1. SslAutoConfiguration registers the bundle<br/>in SslBundles (files not read yet)"]
+    R --> T["2. Tomcat is created: SslConnectorCustomizer<br/>calls getKeyStore() and getTrustStore()<br/>both .p12 files read here, once"]
+    T --> F["3. Feign client bean: JdkHttpClientBuilder<br/>calls bundle.createSslContext()<br/>SSLContext for outbound calls"]
+    F --> S["4. Tomcat starts and builds its own SSLContext<br/>from the KeyStore objects it was given"]
+    S --> D["Started ConsumerApplication"]
 ```
-Caused by: java.lang.IllegalStateException: Could not load store from 'file:/nonexistent/truststore.p12'
-```
 
-From then on only the in-memory copies are used, so replacing a file on disk changes nothing until
-a restart. With `reload-on-update: true` and `file:` locations, Spring Boot would reload the bundle
-and Tomcat's `:9443` connector would pick it up, but the Feign client keeps the `SSLContext` it was
-built with.
+1. **Registration.** `SslAutoConfiguration` binds `spring.ssl.bundle.jks.service-consumer`: keystore,
+   truststore, `key.alias` and `options.enabled-protocols`. `SslPropertiesBundleRegistrar` then registers
+   it as a `PropertiesSslBundle` in `DefaultSslBundleRegistry`, the `SslBundles` bean. Nothing is read
+   yet. `JksSslStoreBundle` keeps each store behind a `SingletonSupplier`, which opens the file the
+   first time the store is asked for.
+2. **Tomcat is created.** This happens in `onRefresh`, before the application's own beans. Because of
+   `server.ssl.bundle: service-consumer`, `TomcatWebServerFactory` applies the bundle through
+   `SslConnectorCustomizer`, which calls `getKeyStore()` and `getTrustStore()`. **This is the moment
+   both `.p12` files are read**, once. Tomcat receives:
+   - the two loaded `KeyStore` objects;
+   - the key alias and password;
+   - the enabled protocols;
+   - `certificateVerification = none`, because `server.ssl.client-auth` isn't set.
 
-**2. A caller connects to `:9443`: keystore only.** Tomcat selects the key entry
-(`matching alias: service-consumer`), sends that certificate and signs the handshake with its private
-key. It sends no `CertificateRequest`, because `server.ssl.client-auth` isn't set, so the truststore
-plays no part in inbound calls. That's why `:9443` keeps working in the rogue-truststore test under
-[Running locally](#running-locally).
+   A wrong path or password fails right here, before anything else starts:
+   `Could not load store: … Could not load store from 'file:/…'`.
+3. **The Feign client is built** during bean creation. `ProducerFeignConfiguration` fetches the
+   bundle from `SslBundles` and passes it to `JdkHttpClientBuilder`, which calls
+   `SslBundle.createSslContext()`. Behind that call, `DefaultSslManagerBundle`:
+   - checks that `key.alias` exists in the keystore;
+   - builds a `KeyManagerFactory` from the keystore, wrapped in Spring's `AliasKeyManagerFactory`;
+   - builds a PKIX `TrustManagerFactory` from the truststore;
+   - calls `SSLContext.init(keyManagers, trustManagers, null)`.
 
-**3. First call to the producer: the mTLS handshake.** Opening the connection to the producer uses
-both stores, in this order:
+   The context goes into `HttpClient.newBuilder().sslContext(...)`, together with `SSLParameters`
+   carrying the enabled protocols. JSSE logs `found key for : service-consumer` and
+   `adding as trusted certificates` on the `main` thread.
+4. **Tomcat starts** at the end of the refresh. It builds its own `SSLContext` from the `KeyStore`
+   objects it was given, keeping only the key entry named by `key.alias`. JSSE logs the same two lines
+   again, then Boot logs `Tomcat started on port 9443 (https)`. Tomcat creates trust managers from the
+   truststore as well, but with `certificateVerification = none` they are never consulted.
+
+After startup the files are not read again, so replacing them on disk has no effect until a restart.
+With `reload-on-update: true` and `file:` locations, Boot's file watcher re-registers the bundle and
+pushes it to Tomcat (`SslConnectorCustomizer.update`). The Feign `HttpClient`, however, keeps the
+`SSLContext` it was built with.
+
+<a id="qa-stores-per-request"></a>
+#### What happens when an HTTPS request comes in
 
 ```mermaid
 sequenceDiagram
-    participant C as service-consumer (JDK HttpClient)
+    participant U as curl / browser
+    participant T as Tomcat :9443
+    participant H as HelloController
+    participant F as Feign + JDK HttpClient
     participant P as service-producer :8443
-    C->>P: ClientHello
-    P-->>C: ServerHello, CertificateRequest
-    P-->>C: Certificate CN=service-producer
-    Note over C: TRUSTSTORE: does the chain end at the demo root CA?<br/>does the SAN match localhost?
-    P-->>C: CertificateVerify, Finished
-    Note over C: KEYSTORE: key entry service-consumer
-    C->>P: Certificate CN=service-consumer
-    C->>P: CertificateVerify signed with the private key, Finished
-    Note over P: chain check, then the CN allow-list
-    C->>P: GET /api/v1/greetings/... (encrypted)
+    U->>T: ClientHello
+    Note over T: KEYSTORE: key alias service-consumer,<br/>certificate sent, private key signs CertificateVerify
+    T-->>U: handshake finished, no CertificateRequest
+    U->>T: GET /api/v1/hello/himansu?lang=fr (encrypted)
+    T->>H: Spring MVC dispatches the decrypted request
+    H->>F: ProducerClient.fetchGreeting(himansu, fr)
+    alt no open connection to the producer
+        F->>P: ClientHello
+        P-->>F: CertificateRequest, Certificate CN=service-producer
+        Note over F: TRUSTSTORE: does the chain end at the demo root CA?<br/>does the SAN cover localhost?
+        Note over F: KEYSTORE: key for a CA the producer accepts,<br/>certificate sent, private key signs CertificateVerify
+    else connection pooled, or TLS session resumed
+        Note over F: no certificates exchanged, neither store used
+    end
+    F->>P: GET /api/v1/greetings/himansu?lang=fr (encrypted)
+    P-->>F: 200 greeting JSON
+    F-->>H: Greeting
+    H-->>T: HelloResponse
+    T-->>U: 200 JSON (encrypted)
 ```
 
-1. The producer's `Certificate` message is checked against the **truststore** the moment it arrives
-   (`Found trusted certificate`), together with the hostname check against its SAN.
-2. After the producer's `Finished`, the **keystore** answers the `CertificateRequest`. Spring Boot's
-   key manager (`AliasKeyManagerFactory`, pinned to `key.alias: service-consumer`) supplies the
-   certificate chain, and the private key signs `CertificateVerify`, proving the consumer owns that
-   certificate.
-3. Only then does the first HTTP request leave the consumer.
+**Inbound on `:9443`: keystore only.** Tomcat's NIO connector accepts the connection and runs the
+server side of the handshake on an `SSLEngine` from its `SSLContext`. Its key manager returns the
+configured alias (`matching alias: service-consumer`), and Tomcat sends that certificate chain and
+signs `CertificateVerify` with the private key. It sends no `CertificateRequest`, because
+`certificateVerification` is `none`, so the truststore stays idle. Only after the handshake does Tomcat
+decrypt the request and hand it to `DispatcherServlet`. That's why `:9443` keeps working in the
+rogue-truststore test under [Running locally](#running-locally).
 
-**4. Every call after that: neither store.**
+**Outbound from Feign to the producer: both stores.** `HelloController` calls `ProducerClient`, and
+Feign's `Http2Client` passes the request to the JDK `HttpClient`. The client first looks for an open
+connection to `localhost:8443`. Only when there is none does it open one and run the client side of
+the handshake on the Feign `SSLContext`:
 
-- The JDK `HttpClient` keeps the connection in its pool and Feign reuses it, so a call made soon after
-  the previous one needs no handshake at all (in the test run, the second call opened no connection).
+1. **The producer's `Certificate` arrives, and the truststore is used.** The trust manager validates
+   the chain up to the demo root CA (`Found trusted certificate`). Because the `HttpClient` turns on
+   hostname verification, it also checks that the certificate's SAN covers `localhost`. A failure here
+   shows up as `PKIX path building failed`, and the consumer answers `502`.
+2. **The producer's `CertificateRequest` is answered, and the keystore is used.** The producer runs
+   with `client-auth: need`, and its request names the CAs it accepts
+   (`CN=mTLS Demo Root CA, O=com.org`). The key manager picks a key whose certificate chains to one of
+   them. Spring's `AliasKeyManagerFactory` pins `key.alias` only in the server role; in the client role
+   the JDK chooses by key type and issuer. With a single key entry, that is `service-consumer`
+   (`matching alias: service-consumer`). The certificate chain is sent, and the private key signs
+   `CertificateVerify`.
+3. **With the handshake finished**, the HTTP request leaves the consumer, encrypted with the session
+   keys.
+
+**Every call after that uses neither store.**
+
+- The JDK `HttpClient` keeps the connection in its pool, and Feign reuses it. A call made soon after
+  the previous one needs no handshake at all; in the test run, the second call opened no connection.
   The pool drops a connection after 30 s without use (`jdk.httpclient.keepalive.timeout`, JDK 25
   default); a call 50 s after the previous one needed a new connection.
-- When a new connection is needed, the client resumes the TLS 1.3 session with the ticket it got
-  from the first handshake (`Try resuming session`, then
-  `Found resumable session. Preparing PSK message.`). No certificate travels in either direction and
-  neither store is consulted, yet the producer still reports `callerCn: service-consumer`, because the
-  resumed session carries the certificate from the original handshake.
+- When a new connection is needed, the client resumes the TLS 1.3 session with the ticket it got from
+  the first handshake (`Try resuming session`, then `Found resumable session. Preparing PSK message.`).
+  No certificate travels in either direction, and neither store is consulted. The producer still
+  reports `callerCn: service-consumer`, because the resumed session carries the certificate from the
+  original handshake.
 - Both stores come back into play only for a **full** handshake: after either service restarts, or
   once the session ticket expires.
 
-How to produce such a trace: [root README — TLS handshake trace](../README.md#tls-handshake-trace).
-Every handshake message in detail: [root README — the mTLS handshake step by step](../README.md#the-mtls-handshake).
+The log messages quoted here come from a traced run with
+`-Djavax.net.debug=ssl:handshake:keymanager:trustmanager` on the consumer. The class names come from
+the Spring Boot 4.1.1 and Tomcat 11.0.24 sources. How to produce such a trace:
+[root README — TLS handshake trace](../README.md#tls-handshake-trace). Every handshake message in
+detail: [root README — the mTLS handshake step by step](../README.md#the-mtls-handshake).
