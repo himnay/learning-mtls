@@ -21,6 +21,9 @@
 10. 🧪 [Testing](#testing)
 11. 📁 [Project layout](#project-layout)
 12. ⚠️ [Production notes](#production-notes)
+13. ❓ [Q&A](#qa)
+    - 13.1 [How do I create a keystore and a truststore from a CA-issued `.crt` file?](#qa-keystore-from-crt)
+    - 13.2 [Does the CA email me the private key?](#qa-ca-private-key)
 
 <a id="stack"></a>
 ## <span style="color:hsl(278,80%,58%)">1. 🧰 Stack</span>
@@ -28,7 +31,7 @@
 | Component         | Version / Detail                                                        |
 |-------------------|-------------------------------------------------------------------------|
 | Java              | 25 (`maven.compiler.release` from super-pom; needs JDK 25+)             |
-| Spring Boot       | 4.1.0 (via `learning-mtls` → `super-pom`)                               |
+| Spring Boot       | 4.1.1 (via `learning-mtls` → `super-pom`)                               |
 | Web               | Spring MVC on embedded Tomcat, HTTPS only (port `8443`)                 |
 | TLS               | Spring Boot SSL bundles, PKCS12, TLS 1.3 / 1.2                          |
 | Persistence       | Spring Data JDBC + PostgreSQL 19 (beta3), HikariCP                      |
@@ -112,7 +115,7 @@ e.g. `CN=service-consumer` and `CN=service-unknown` for the test-client certs.
 | `src/test/resources/ssl/service-consumer-keystore.p12` | key + cert `CN=service-consumer`, issued by **this** module's script. It's a separate key pair from the consumer module's own keystore | Integration test: allowed client |
 | `src/test/resources/ssl/service-unknown-keystore.p12` | CA-signed, `CN=service-unknown` | Integration test: trusted but forbidden |
 
-Regenerate with this module's own script (shares the root CA in `../insomnia-certs` with the consumer's script):
+Regenerate with this module's own script (shares the root CA in `../certs/out` with the consumer's script):
 
 ```bash
 service-producer/src/main/resources/ssl/generate-certs.sh
@@ -419,11 +422,11 @@ mvn spring-boot:run                              # DevTools restarts on recompil
 
 In an IDE, set the same variable in the run configuration ([6.1](#jasypt-configuration)).
 
-Smoke test with `curl`. The PEM files live in `../insomnia-certs`, which is git-ignored; on a fresh clone,
+Smoke test with `curl`. The PEM files live in `certs/out` at the repo root, which is git-ignored; on a fresh clone,
 create them first ([root README → Quick start](../README.md#quick-start), step 3):
 
 ```bash
-cd certs/out
+cd certs/out                                     # at the repo root
 # allowed
 curl --cacert ca.crt --cert service-consumer.crt --key service-consumer.key \
      "https://localhost:8443/api/v1/greetings/himansu?lang=fr"
@@ -492,8 +495,151 @@ service-producer
 
 - The `.p12` stores in `src/*/resources/ssl` are **demo material** committed so the project runs
   out of the box. Real deployments mount stores from a secret manager and set
-  `SSL_KEYSTORE_LOCATION=file:/…`. The CA private key (`../insomnia-certs`) is never committed.
+  `SSL_KEYSTORE_LOCATION=file:/…`. The CA private key (`../certs/out/ca.key`) is never committed.
 - Replace `changeit` and the demo Jasypt master key; inject both via env/secret store.
 - Consider short-lived certs (cert-manager, Vault PKI, SPIFFE/SPIRE) and enabling
   `spring.ssl.bundle.jks.*.reload-on-update` with file-based stores for hot rotation.
 - For richer authorization map the CN to roles with Spring Security's `x509()` support.
+
+<a id="qa"></a>
+## <span style="color:hsl(190,80%,50%)">13. ❓ Q&A</span>
+
+<a id="qa-keystore-from-crt"></a>
+### <span style="color:hsl(20,80%,58%)">13.1 How do I create a keystore and a truststore from a CA-issued `.crt` file?</span>
+
+**Q:** How can you create a keystore and a truststore from an X.509 `.crt` file issued by a CA?
+
+**A:** The truststore needs only the CA certificate. The keystore also needs the **private key**, and a
+`.crt` does not contain one: the CA only signed the public key from your CSR. The private key is
+wherever the CSR was generated, either a `.key` file (openssl) or the keystore you ran
+`keytool -certreq` against.
+
+| File | `service-producer-keystore.p12` | `truststore.p12` |
+|---|---|---|
+| `service-producer.key`: private key from the CSR step | ✅ | ❌ |
+| `service-producer.crt`: certificate issued by the CA | ✅ | ❌ |
+| `ca.crt`: CA certificate, plus any intermediates | ✅ as the chain | ✅ |
+
+**Keystore, when the CSR was made with openssl** (the key is a `.key` file). This is what
+`generate-certs.sh` does:
+
+```bash
+# check that key and certificate belong together: both hashes must be identical
+openssl x509 -noout -pubkey -in service-producer.crt | openssl sha256
+openssl pkey -pubout -in service-producer.key | openssl sha256
+
+# with intermediates, bundle the chain first: cat intermediate.crt root.crt > ca.crt
+openssl pkcs12 -export -name service-producer \
+  -inkey service-producer.key -in service-producer.crt -certfile ca.crt \
+  -out service-producer-keystore.p12 -passout pass:changeit
+```
+
+`-name` becomes the entry's alias. It must match `spring.ssl.bundle.jks.service-producer.key.alias`
+(`service-producer`).
+
+**Keystore, when the CSR was made with keytool** (the key already sits in a keystore). Import the CA
+chain, then the signed certificate under the **same alias as the key**. That replaces the self-signed
+placeholder, and the entry stays a `PrivateKeyEntry`:
+
+```bash
+keytool -importcert -noprompt -alias ca -file ca.crt \
+  -keystore service-producer-keystore.p12 -storepass changeit
+keytool -importcert -alias service-producer -file service-producer.crt \
+  -keystore service-producer-keystore.p12 -storepass changeit
+```
+
+**Truststore**, the CA certificate only:
+
+```bash
+keytool -importcert -noprompt -alias mtls-demo-ca -file ca.crt \
+  -keystore truststore.p12 -storetype PKCS12 -storepass changeit
+```
+
+The producer's truststore must hold the CA that signed its **callers'** certificates, not
+`service-producer.crt`. Trusting a CA accepts every certificate that CA issues, which is why the CN
+allow-list ([4.2](#how-mutual-tls-is-enforced)) is still needed. For more CAs, repeat `-importcert` with
+another alias.
+
+**Check the result**, then point the bundle at the new files with `SSL_KEYSTORE_LOCATION=file:/…` and
+`SSL_TRUSTSTORE_LOCATION=file:/…` ([Configuration reference](#configuration-reference)):
+
+```bash
+# expect: Entry type: PrivateKeyEntry, Certificate chain length: 2 or more
+keytool -list -v -keystore service-producer-keystore.p12 -storepass changeit
+# expect: one trustedCertEntry per CA
+keytool -list -keystore truststore.p12 -storepass changeit
+```
+
+**Traps**
+
+- **Lost private key:** it cannot be recovered. Generate a new key and CSR, and ask the CA to reissue
+  the certificate (rekey).
+- **DER instead of PEM** (binary, no `-----BEGIN`): convert it with
+  `openssl x509 -inform der -in cert.cer -out cert.crt`.
+- **Chain missing from the keystore:** clients that don't have the intermediate fail with
+  `PKIX path building failed`.
+- **mTLS:** each side has its own keystore (its own key and certificate), and each side's truststore
+  holds the CA that signed the *other* side's certificate.
+
+Keystore vs truststore and the store formats are covered in
+[root README — keystores, truststores and file formats](../README.md#stores-and-formats).
+
+<a id="qa-ca-private-key"></a>
+### <span style="color:hsl(80,80%,50%)">13.2 Does the CA email me the private key?</span>
+
+**Q:** Does the CA mail you the private key?
+
+**A:** No. In the normal flow the CA never has the private key, so it has nothing to send. You generate
+the key pair and send a **CSR** (certificate signing request): your public key and subject, signed
+with your private key to prove you hold it. The CA checks who you are, signs the public key and sends
+back only the certificate.
+
+```mermaid
+sequenceDiagram
+    participant You as You (service-producer host)
+    participant CA
+    You->>You: generate key pair → service-producer.key (never leaves)
+    You->>CA: CSR = public key + subject, signed with the private key
+    CA->>CA: verify identity or domain, sign the public key
+    CA-->>You: service-producer.crt + CA chain
+    You->>You: key + certificate + chain → service-producer-keystore.p12
+```
+
+```bash
+# -addext requests the SAN: the consumer checks the host it dialled against the SAN
+openssl req -new -newkey rsa:2048 -nodes -sha256 \
+  -keyout service-producer.key -out service-producer.csr \
+  -subj "/CN=service-producer/O=com.org" \
+  -addext "subjectAltName=DNS:service-producer,DNS:localhost,IP:127.0.0.1"
+# send service-producer.csr to the CA and keep service-producer.key private
+```
+
+`generate-certs.sh` plays both roles on one machine. It creates the key and CSR, then signs the CSR
+with the demo CA's `ca.key`, which stays in the git-ignored `certs/out` at the repo root. No private
+key ever travels.
+
+**Exception: the CA generates the key for you.** Some CAs, enterprise PKI portals (for example
+Microsoft AD CS web enrollment or Venafi) and cloud consoles can create the key pair on their side.
+You then download a password-protected `.pfx`/`.p12` holding key, certificate and chain. That file
+already is a keystore: point `SSL_KEYSTORE_LOCATION` at it and set `key.alias` to its entry (see
+`keytool -list`), or convert it:
+
+```bash
+keytool -importkeystore -srckeystore download.pfx -srcstoretype PKCS12 \
+  -destkeystore service-producer-keystore.p12 -deststoretype PKCS12
+```
+
+> ⚠️ Whoever generated the key has seen it. Treat a private key sent **by email** as compromised:
+> mail servers and inboxes keep copies. Prefer the CSR flow. If server-side generation is
+> unavoidable, download over HTTPS and protect the file with a strong password.
+
+**So where is my key?** Wherever the CSR was made:
+
+- **openssl:** the `.key` file next to the `.csr`.
+- **keytool:** inside the `.jks`/`.p12` used with `keytool -certreq`.
+- **IIS / Windows:** in the Windows certificate store. Complete the certificate request, then export
+  a `.pfx`.
+- **A teammate or ops made the CSR:** ask them.
+
+Not found anywhere? Then it is lost. Create a new key and CSR and ask the CA to reissue the
+certificate (rekey); most CAs do that free of charge while the certificate is still valid.

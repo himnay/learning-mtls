@@ -13,23 +13,26 @@
 9. 🧪 [Testing](#testing)
 10. 📁 [Project layout](#project-layout)
 11. ⚠️ [Production notes](#production-notes)
+12. ❓ [Q&A](#qa)
+    - 12.1 [How do I create a keystore and a truststore from a CA-issued `.crt` file?](#qa-keystore-from-crt)
+    - 12.2 [Does the CA email me the private key?](#qa-ca-private-key)
 
 <a id="stack"></a>
 ## <span style="color:hsl(278,80%,58%)">1. 🧰 Stack</span>
 
-| Component    | Version / Detail                                                   |
-|--------------|--------------------------------------------------------------------|
-| Java         | 25 (`maven.compiler.release` from super-pom; needs JDK 25+)        |
-| Spring Boot  | 4.1.0 (via `learning-mtls` → `super-pom`)                          |
-| Spring Cloud | 2025.1.2 (via `learning-bom`): OpenFeign 5.0.2                     |
-| Web          | Spring MVC on embedded Tomcat, HTTPS (port `9443`)                 |
-| HTTP client  | Feign 13.6 `@FeignClient` on the JDK `HttpClient` (`feign-java11`) |
-| JSON         | Jackson 3 (`tools.jackson`, the Spring Boot 4 default)             |
-| TLS          | Spring Boot SSL bundles, PKCS12, TLS 1.3 / 1.2                     |
-| Boilerplate  | Lombok + Java records                                              |
-| Dev loop     | Spring Boot DevTools (auto-restart)                                |
-| Tests        | JUnit Jupiter 6, `@WebMvcTest`, Mockito                            |
-| Build        | Maven 3.9+                                                         |
+| Component    | Version / Detail                                                     |
+|--------------|----------------------------------------------------------------------|
+| Java         | 25 (`maven.compiler.release` from super-pom; needs JDK 25+)          |
+| Spring Boot  | 4.1.1 (via `learning-mtls` → `super-pom`)                            |
+| Spring Cloud | 2025.1.3 (via `learning-bom`): OpenFeign 5.0.3                       |
+| Web          | Spring MVC on embedded Tomcat, HTTPS (port `9443`)                   |
+| HTTP client  | Feign 13.6.1 `@FeignClient` on the JDK `HttpClient` (`feign-java11`) |
+| JSON         | Jackson 3 (`tools.jackson`, the Spring Boot 4 default)               |
+| TLS          | Spring Boot SSL bundles, PKCS12, TLS 1.3 / 1.2                       |
+| Boilerplate  | Lombok + Java records                                                |
+| Dev loop     | Spring Boot DevTools (auto-restart)                                  |
+| Tests        | JUnit Jupiter 6, `@WebMvcTest`, Mockito                              |
+| Build        | Maven 3.9+                                                           |
 
 <a id="what-this-service-does"></a>
 ## <span style="color:hsl(56,80%,50%)">2. 🎯 What this service does</span>
@@ -94,7 +97,7 @@ identity, presented as the client cert to the producer and also as the server ce
 | `ssl/service-consumer-keystore.p12`  | private key + cert `CN=service-consumer` (EKU `serverAuth,clientAuth`) + CA cert | Client cert sent to the producer; also server cert for `:9443` |
 | `ssl/truststore.p12`                 | demo root CA only | Validating the producer's server certificate |
 
-Regenerate with this module's own script (shares the root CA in `../insomnia-certs` with the producer's script):
+Regenerate with this module's own script (shares the root CA in `../certs/out` with the producer's script):
 
 ```bash
 service-consumer/src/main/resources/ssl/generate-certs.sh
@@ -105,7 +108,7 @@ rebuilds `truststore.p12`. The script is excluded from the jar.
 
 The producer's script issues its own, separate `CN=service-consumer` test certificate (in
 `service-producer/src/test/resources/ssl/`), so regenerating here doesn't touch that one. Both
-scripts write `../insomnia-certs`, and the last one to run wins. Keystore vs
+scripts write `../certs/out`, and the last one to run wins. Keystore vs
 truststore, X.509 fields, PKCS#12 and the mTLS handshake are explained in
 [root README — PKI, keystores, TLS handshake](../README.md#pki).
 
@@ -308,3 +311,152 @@ service-consumer
 - Inbound `:9443` is one-way TLS. Add `server.ssl.client-auth: need` if callers of the consumer must also authenticate.
 - For real traffic, add circuit breaking with `spring.cloud.openfeign.circuitbreaker.enabled=true` plus a
   Spring Cloud CircuitBreaker implementation (e.g. Resilience4j). Add an explicit `Retryer` only for idempotent calls.
+
+<a id="qa"></a>
+## <span style="color:hsl(190,80%,50%)">12. ❓ Q&A</span>
+
+<a id="qa-keystore-from-crt"></a>
+### <span style="color:hsl(20,80%,58%)">12.1 How do I create a keystore and a truststore from a CA-issued `.crt` file?</span>
+
+**Q:** How can you create a keystore and a truststore from an X.509 `.crt` file issued by a CA?
+
+**A:** The truststore needs only the CA certificate. The keystore also needs the **private key**, and a
+`.crt` does not contain one: the CA only signed the public key from your CSR. The private key is
+wherever the CSR was generated, either a `.key` file (openssl) or the keystore you ran
+`keytool -certreq` against.
+
+| File | `service-consumer-keystore.p12` | `truststore.p12` |
+|---|---|---|
+| `service-consumer.key`: private key from the CSR step | ✅ | ❌ |
+| `service-consumer.crt`: certificate issued by the CA | ✅ | ❌ |
+| `ca.crt`: CA certificate, plus any intermediates | ✅ as the chain | ✅ |
+
+**Keystore, when the CSR was made with openssl** (the key is a `.key` file). This is what
+`generate-certs.sh` does:
+
+```bash
+# check that key and certificate belong together: both hashes must be identical
+openssl x509 -noout -pubkey -in service-consumer.crt | openssl sha256
+openssl pkey -pubout -in service-consumer.key | openssl sha256
+
+# with intermediates, bundle the chain first: cat intermediate.crt root.crt > ca.crt
+openssl pkcs12 -export -name service-consumer \
+  -inkey service-consumer.key -in service-consumer.crt -certfile ca.crt \
+  -out service-consumer-keystore.p12 -passout pass:changeit
+```
+
+`-name` becomes the entry's alias. It must match `spring.ssl.bundle.jks.service-consumer.key.alias`
+(`service-consumer`).
+
+**Keystore, when the CSR was made with keytool** (the key already sits in a keystore). Import the CA
+chain, then the signed certificate under the **same alias as the key**. That replaces the self-signed
+placeholder, and the entry stays a `PrivateKeyEntry`:
+
+```bash
+keytool -importcert -noprompt -alias ca -file ca.crt \
+  -keystore service-consumer-keystore.p12 -storepass changeit
+keytool -importcert -alias service-consumer -file service-consumer.crt \
+  -keystore service-consumer-keystore.p12 -storepass changeit
+```
+
+**Truststore**, the CA certificate only:
+
+```bash
+keytool -importcert -noprompt -alias mtls-demo-ca -file ca.crt \
+  -keystore truststore.p12 -storetype PKCS12 -storepass changeit
+```
+
+The consumer's truststore must hold the CA that signed the **producer's** server certificate,
+not `service-consumer.crt`. The JDK `HttpClient` also checks the producer certificate's SAN against the host in
+`clients.producer.base-url`. For more CAs, repeat `-importcert` with another alias.
+
+Ask the CA for extended key usage **`clientAuth`**. This module's certificate has
+`serverAuth,clientAuth` because it is also the `:9443` server certificate. If a certificate's EKU
+lacks `clientAuth`, the producer's handshake rejects it (`Extended key usage does not permit use for
+TLS client authentication`). Public web CAs are phasing `clientAuth` out of
+their TLS certificates, so mTLS client certificates normally come from a private CA, like the
+demo CA here.
+
+**Check the result**, then point the bundle at the new files with `SSL_KEYSTORE_LOCATION=file:/…` and
+`SSL_TRUSTSTORE_LOCATION=file:/…` ([Configuration reference](#configuration-reference)):
+
+```bash
+# expect: Entry type: PrivateKeyEntry, Certificate chain length: 2 or more
+keytool -list -v -keystore service-consumer-keystore.p12 -storepass changeit
+# expect: one trustedCertEntry per CA
+keytool -list -keystore truststore.p12 -storepass changeit
+```
+
+**Traps**
+
+- **Lost private key:** it cannot be recovered. Generate a new key and CSR, and ask the CA to reissue
+  the certificate (rekey).
+- **DER instead of PEM** (binary, no `-----BEGIN`): convert it with
+  `openssl x509 -inform der -in cert.cer -out cert.crt`.
+- **Chain missing from the keystore:** clients that don't have the intermediate fail with
+  `PKIX path building failed`.
+- **mTLS:** each side has its own keystore (its own key and certificate), and each side's truststore
+  holds the CA that signed the *other* side's certificate.
+
+Keystore vs truststore and the store formats are covered in
+[root README — keystores, truststores and file formats](../README.md#stores-and-formats).
+
+<a id="qa-ca-private-key"></a>
+### <span style="color:hsl(80,80%,50%)">12.2 Does the CA email me the private key?</span>
+
+**Q:** Does the CA mail you the private key?
+
+**A:** No. In the normal flow the CA never has the private key, so it has nothing to send. You generate
+the key pair and send a **CSR** (certificate signing request): your public key and subject, signed
+with your private key to prove you hold it. The CA checks who you are, signs the public key and sends
+back only the certificate.
+
+```mermaid
+sequenceDiagram
+    participant You as You (service-consumer host)
+    participant CA
+    You->>You: generate key pair → service-consumer.key (never leaves)
+    You->>CA: CSR = public key + subject, signed with the private key
+    CA->>CA: verify identity or domain, sign the public key
+    CA-->>You: service-consumer.crt + CA chain
+    You->>You: key + certificate + chain → service-consumer-keystore.p12
+```
+
+```bash
+# -addext requests the SAN: this certificate is also the :9443 server certificate
+openssl req -new -newkey rsa:2048 -nodes -sha256 \
+  -keyout service-consumer.key -out service-consumer.csr \
+  -subj "/CN=service-consumer/O=com.org" \
+  -addext "subjectAltName=DNS:service-consumer,DNS:localhost,IP:127.0.0.1"
+# send service-consumer.csr to the CA and keep service-consumer.key private
+```
+
+`generate-certs.sh` plays both roles on one machine. It creates the key and CSR, then signs the CSR
+with the demo CA's `ca.key`, which stays in the git-ignored `certs/out` at the repo root. No private
+key ever travels.
+
+**Exception: the CA generates the key for you.** Some CAs, enterprise PKI portals (for example
+Microsoft AD CS web enrollment or Venafi) and cloud consoles can create the key pair on their side.
+You then download a password-protected `.pfx`/`.p12` holding key, certificate and chain. That file
+already is a keystore: point `SSL_KEYSTORE_LOCATION` at it and set `key.alias` to its entry (see
+`keytool -list`), or convert it:
+
+```bash
+keytool -importkeystore -srckeystore download.pfx -srcstoretype PKCS12 \
+  -destkeystore service-consumer-keystore.p12 -deststoretype PKCS12
+```
+
+> ⚠️ Whoever generated the key has seen it. Treat a private key sent **by email** as compromised:
+> mail servers and inboxes keep copies. Prefer the CSR flow. If server-side generation is
+> unavoidable, download over HTTPS and protect the file with a strong password.
+
+**So where is my key?** Wherever the CSR was made:
+
+- **openssl:** the `.key` file next to the `.csr`.
+- **keytool:** inside the `.jks`/`.p12` used with `keytool -certreq`.
+- **IIS / Windows:** in the Windows certificate store. Complete the certificate request, then export
+  a `.pfx`.
+- **A teammate or ops made the CSR:** ask them.
+
+Not found anywhere? Then it is lost. Create a new key and CSR and ask the CA to reissue the
+certificate (rekey); most CAs do that free of charge while the certificate is still valid.

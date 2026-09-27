@@ -89,7 +89,8 @@ flowchart LR
 | [`service-producer`](service-producer) | mTLS server; reads greetings from PostgreSQL; CN allow-list; Jasypt-encrypted DB password | [README](service-producer/README.md) |
 | [`service-consumer`](service-consumer) | mTLS client; calls the producer with its client cert via an OpenFeign client (`@FeignClient`) on the SSL bundle | [README](service-consumer/README.md) |
 | `docker-compose.yml` | PostgreSQL `19beta3` for the producer (host port 5434) | — |
-| `insomnia-certs` (git-ignored) | Shared root CA (`ca.key`, `ca.crt`) + PEM copies for `curl` / `openssl`. Written by the generate scripts, or extracted from the committed stores ([Quick start](#quick-start)) | — |
+| `certs/out/` (git-ignored) | Shared root CA (`ca.key`, `ca.crt`) + PEM copies for `curl` / `openssl`. Written by the generate scripts, or extracted from the committed stores ([Quick start](#quick-start)) | — |
+| [`insomnia-certs/ca.crt`](insomnia-certs/ca.crt) | The demo CA certificate (public), for Insomnia's CA setting ([Insomnia collection](#insomnia)) | — |
 
 <a id="maven-structure"></a>
 ## <span style="color:hsl(331,80%,58%)">3. 🏗️ Maven structure</span>
@@ -150,10 +151,10 @@ Things worth knowing before you run them:
   real keystore. The producer's script issues the producer's *test* keystore (the integration-test
   client). They are separate key pairs with different serials, from the same CA and with the same
   CN. The producer accepts both because it only checks the chain and the CN.
-- Both scripts write `insomnia-certs`, so the PEM pair there belongs to
+- Both scripts write `certs/out/service-consumer.{crt,key}`, so the PEM pair there belongs to
   whichever script ran last. Either pair works for `curl`.
-- **`insomnia-certs` exists only on your disk.** No committed store contains it. If you delete
-  `insomnia-certs`, the next script run creates a new CA, so run **both** scripts afterwards. The CA
+- **`certs/out` exists only on your disk.** No committed store contains `ca.key`. If you delete
+  `certs/out`, the next script run creates a new CA, so run **both** scripts afterwards. The CA
   *certificate* can always be re-extracted from a committed truststore ([Quick start](#quick-start), step 3).
 
 <a id="security-goals"></a>
@@ -486,7 +487,7 @@ The private key **never leaves** the applicant — the CA only sees the public k
 data structure that binds a public key to an identity (the *subject*), signed by an
 *issuer* (a CA), valid for a given period, and carrying extensions such as key usage and
 subject alternative names. It's the certificate format used by TLS and, in this project,
-by mTLS: every `.crt` file under `insomnia-certs` and every entry in a `.p12` store is an
+by mTLS: every `.crt` file under `certs/out/` and every entry in a `.p12` store is an
 X.509 certificate.
 
 ```
@@ -748,7 +749,7 @@ replace it for anything real.
 |---|---|---|
 | **ASN.1** | Abstract schema language all these structures are defined in | — |
 | **DER** | Binary encoding of ASN.1 | inside everything below |
-| **PEM** | Base64(DER) between `-----BEGIN …-----` / `-----END …-----` — text, copy-paste friendly | `insomnia-certs`, `*.key` (used by `curl`) |
+| **PEM** | Base64(DER) between `-----BEGIN …-----` / `-----END …-----` — text, copy-paste friendly | `certs/out/*.crt`, `*.key` (used by `curl`) |
 | **PKCS#1** | RSA-only key format (`BEGIN RSA PRIVATE KEY`) | — |
 | **PKCS#8** | Algorithm-agnostic private key (`BEGIN PRIVATE KEY`; encrypted variant `BEGIN ENCRYPTED PRIVATE KEY`) | `*.key`; inside `.p12` as shrouded keybag |
 | **PKCS#10** | Certificate Signing Request (`BEGIN CERTIFICATE REQUEST`) | `*.csr` (temporary) |
@@ -1587,7 +1588,7 @@ docker compose down
 - **Running from an IDE:** add `JASYPT_ENCRYPTOR_PASSWORD=mtls-demo-master-key` to the
   `ProducerApplication` run configuration's environment variables. Without it, startup fails with
   `Failed to bind properties under 'spring.datasource.password'`.
-- Instead of step 3 you can run both generate scripts (section 4). That also fills `insomnia-certs`,
+- Instead of step 3 you can run both generate scripts (section 4). That also fills `certs/out`,
   but it creates a new CA and re-issues every committed store.
 - The extracted PEMs include no `ca.key`. If you run a generate script later, it creates a new CA,
   so run **both** scripts.
