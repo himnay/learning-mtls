@@ -19,6 +19,7 @@
     - 12.3 [When exactly are the keystore and the truststore used?](#qa-when-stores-used)
         - [What Spring Boot does at startup](#qa-stores-at-startup)
         - [What happens when an HTTPS request comes in](#qa-stores-per-request)
+    - 12.4 [Does a service need a keystore if it only calls another service, or only serves one?](#qa-keystore-by-role)
 
 <a id="stack"></a>
 ## <span style="color:hsl(278,80%,58%)">1. 🧰 Stack</span>
@@ -615,3 +616,49 @@ The log messages quoted here come from a traced run with
 the Spring Boot 4.1.1 and Tomcat 11.0.24 sources. How to produce such a trace:
 [root README — TLS handshake trace](../README.md#tls-handshake-trace). Every handshake message in
 detail: [root README — the mTLS handshake step by step](../README.md#the-mtls-handshake).
+
+<a id="qa-keystore-by-role"></a>
+### <span style="color:hsl(165,80%,45%)">12.4 Does a service need a keystore if it only calls another service, or only serves one?</span>
+
+**Q:** Does a service need a keystore if it only consumes an external service but doesn't expose
+any REST API, or the other way round?
+
+**A:** It depends on which side has to prove its identity, not on which way the calls go. A
+**keystore** holds the service's *own* private key and certificate. It's needed whenever *this*
+service must prove who it is in a TLS handshake. A **truststore** holds the CA certificates used to
+check *the other side*.
+
+| Service | TLS mode | Keystore | Truststore |
+|---|---|---|---|
+| Only calls other services | one-way TLS (ordinary HTTPS) | ❌ not needed | only if the server's CA isn't already trusted by the JDK (`cacerts`), e.g. a private CA like the demo CA here |
+| Only calls other services | mTLS: the server asks for a client certificate | ✅ its client certificate and key | same rule as above |
+| Only serves an API | HTTPS | ✅ its server certificate and key | ❌ not needed |
+| Only serves an API | mTLS (`client-auth: need`) | ✅ | ✅ the CAs whose client certificates it accepts |
+| Only serves an API, TLS ends in front of it (ingress, load balancer, service mesh) | plain HTTP inside | ❌ | ❌ |
+
+- **A pure client using ordinary HTTPS needs no keystore.** Calling a public API only requires
+  trusting the server's CA, and the JDK's default truststore already holds the public CAs. There is
+  nothing to configure.
+- **A pure client needs a keystore as soon as the server asks for a client certificate.** Without one,
+  it answers the `CertificateRequest` with an empty certificate, and a server running
+  `client-auth: need` aborts the handshake with `certificate_required`.
+- **A pure server always needs a keystore for HTTPS**, because it must present a certificate and sign
+  the handshake with its private key. It needs a truststore only if it verifies client certificates.
+
+**What that means for this module.** The consumer uses its keystore for both roles: as the client
+certificate towards the producer and as the server certificate on `:9443`.
+
+- If the consumer exposed no API at all, it would still need `service-consumer-keystore.p12`, because
+  the producer runs `client-auth: need`.
+- If the producer stopped asking for client certificates, the consumer would need no keystore for its
+  calls. It would still need a truststore with the demo CA, because the producer's certificate comes
+  from a private CA.
+
+In Spring Boot, an SSL bundle may hold just one of the two stores:
+
+- **Truststore only:** gives an HTTP client trust in a private CA without presenting a client
+  certificate.
+- **Keystore only:** trust falls back to the JDK's default truststore. `DefaultSslManagerBundle`
+  initialises the `TrustManagerFactory` with `null`, and `null` means the JDK default.
+- **Server side:** `server.ssl.bundle` needs the keystore. Add a truststore and
+  `server.ssl.client-auth: need` only for mTLS.
