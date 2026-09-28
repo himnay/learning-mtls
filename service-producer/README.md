@@ -37,7 +37,7 @@
 
 | Component         | Version / Detail                                                        |
 |-------------------|-------------------------------------------------------------------------|
-| Java              | 25 (`maven.compiler.release` from super-pom; needs JDK 25+)             |
+| Java              | 27 (`maven.compiler.release` from super-pom; needs JDK 27+)             |
 | Spring Boot       | 4.1.1 (via `learning-mtls` → `super-pom`)                               |
 | Web               | Spring MVC on embedded Tomcat, HTTPS only (port `8443`)                 |
 | TLS               | Spring Boot SSL bundles, PKCS12, TLS 1.3 / 1.2                          |
@@ -1328,11 +1328,11 @@ More on the private key itself: [13.6](#qa-private-key). Signature algorithms in
 [EncryptablePropertyDetector]: https://github.com/ulisesbocchio/jasypt-spring-boot/blob/jasypt-spring-boot-parent-4.0.4/jasypt-spring-boot/src/main/java/com/ulisesbocchio/jasyptspringboot/EncryptablePropertyDetector.java
 [EncryptablePropertyResolver]: https://github.com/ulisesbocchio/jasypt-spring-boot/blob/jasypt-spring-boot-parent-4.0.4/jasypt-spring-boot/src/main/java/com/ulisesbocchio/jasyptspringboot/EncryptablePropertyResolver.java
 [Environment]: https://github.com/spring-projects/spring-framework/blob/v7.0.9/spring-core/src/main/java/org/springframework/core/env/Environment.java
-[HttpClient]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.net.http/share/classes/java/net/http/HttpClient.java
+[HttpClient]: https://github.com/openjdk/jdk/blob/jdk-27-ga/src/java.net.http/share/classes/java/net/http/HttpClient.java
 [HttpClientSettings]: https://github.com/spring-projects/spring-boot/blob/v4.1.1/module/spring-boot-http-client/src/main/java/org/springframework/boot/http/client/HttpClientSettings.java
-[KeyManagerFactory]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/javax/net/ssl/KeyManagerFactory.java
-[KeyStore]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/java/security/KeyStore.java
-[LdapName]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.naming/share/classes/javax/naming/ldap/LdapName.java
+[KeyManagerFactory]: https://github.com/openjdk/jdk/blob/jdk-27-ga/src/java.base/share/classes/javax/net/ssl/KeyManagerFactory.java
+[KeyStore]: https://github.com/openjdk/jdk/blob/jdk-27-ga/src/java.base/share/classes/java/security/KeyStore.java
+[LdapName]: https://github.com/openjdk/jdk/blob/jdk-27-ga/src/java.naming/share/classes/javax/naming/ldap/LdapName.java
 [PropertySource]: https://github.com/spring-projects/spring-framework/blob/v7.0.9/spring-core/src/main/java/org/springframework/core/env/PropertySource.java
 [RandomIvGenerator]: https://github.com/jasypt/jasypt/blob/jasypt-1.9.3/jasypt/src/main/java/org/jasypt/iv/RandomIvGenerator.java
 [RequiredArgsConstructor]: https://github.com/projectlombok/lombok/blob/v1.18.46/src/core/lombok/RequiredArgsConstructor.java
@@ -1341,8 +1341,8 @@ More on the private key itself: [13.6](#qa-private-key). Signature algorithms in
 [Slf4j]: https://github.com/projectlombok/lombok/blob/v1.18.46/src/core/lombok/extern/slf4j/Slf4j.java
 [SslBundle]: https://github.com/spring-projects/spring-boot/blob/v4.1.1/core/spring-boot/src/main/java/org/springframework/boot/ssl/SslBundle.java
 [SslConnectorCustomizer]: https://github.com/spring-projects/spring-boot/blob/v4.1.1/module/spring-boot-tomcat/src/main/java/org/springframework/boot/tomcat/SslConnectorCustomizer.java
-[SSLContext]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/javax/net/ssl/SSLContext.java
-[SSLHandshakeException]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/javax/net/ssl/SSLHandshakeException.java
+[SSLContext]: https://github.com/openjdk/jdk/blob/jdk-27-ga/src/java.base/share/classes/javax/net/ssl/SSLContext.java
+[SSLHandshakeException]: https://github.com/openjdk/jdk/blob/jdk-27-ga/src/java.base/share/classes/javax/net/ssl/SSLHandshakeException.java
 [StringEncryptor]: https://github.com/jasypt/jasypt/blob/jasypt-1.9.3/jasypt/src/main/java/org/jasypt/encryption/StringEncryptor.java
-[TrustManagerFactory]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/javax/net/ssl/TrustManagerFactory.java
+[TrustManagerFactory]: https://github.com/openjdk/jdk/blob/jdk-27-ga/src/java.base/share/classes/javax/net/ssl/TrustManagerFactory.java
 [Value]: https://github.com/spring-projects/spring-framework/blob/v7.0.9/spring-beans/src/main/java/org/springframework/beans/factory/annotation/Value.java

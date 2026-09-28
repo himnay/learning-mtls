@@ -29,7 +29,7 @@
 
 | Component    | Version / Detail                                                                                  |
 |--------------|---------------------------------------------------------------------------------------------------|
-| Java         | 25 (`maven.compiler.release` from super-pom; needs JDK 25+)                                       |
+| Java         | 27 (`maven.compiler.release` from super-pom; needs JDK 27+)                                       |
 | Spring Boot  | 4.1.1 (via `learning-mtls` → `super-pom`)                                                         |
 | Spring Cloud | 2025.1.3 (via `learning-bom`): OpenFeign 5.0.3                                                    |
 | Web          | Spring MVC on embedded Tomcat, HTTPS (port `9443`)                                                |
@@ -1013,14 +1013,14 @@ More on the private key itself: [the producer README's 13.6](../service-producer
 [FeignClient]: https://github.com/spring-cloud/spring-cloud-openfeign/blob/v5.0.3/spring-cloud-openfeign-core/src/main/java/org/springframework/cloud/openfeign/FeignClient.java
 [FeignException]: https://github.com/OpenFeign/feign/blob/13.6.1/core/src/main/java/feign/FeignException.java
 [Http2Client]: https://github.com/OpenFeign/feign/blob/13.6.1/java11/src/main/java/feign/http2client/Http2Client.java
-[HttpClient]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.net.http/share/classes/java/net/http/HttpClient.java
+[HttpClient]: https://github.com/openjdk/jdk/blob/jdk-27-ga/src/java.net.http/share/classes/java/net/http/HttpClient.java
 [HttpClientSettings]: https://github.com/spring-projects/spring-boot/blob/v4.1.1/module/spring-boot-http-client/src/main/java/org/springframework/boot/http/client/HttpClientSettings.java
 [HttpExchange]: https://github.com/spring-projects/spring-framework/blob/v7.0.9/spring-web/src/main/java/org/springframework/web/service/annotation/HttpExchange.java
-[IOException]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/java/io/IOException.java
+[IOException]: https://github.com/openjdk/jdk/blob/jdk-27-ga/src/java.base/share/classes/java/io/IOException.java
 [JdkHttpClientBuilder]: https://github.com/spring-projects/spring-boot/blob/v4.1.1/module/spring-boot-http-client/src/main/java/org/springframework/boot/http/client/JdkHttpClientBuilder.java
 [JksSslStoreBundle]: https://github.com/spring-projects/spring-boot/blob/v4.1.1/core/spring-boot/src/main/java/org/springframework/boot/ssl/jks/JksSslStoreBundle.java
-[KeyManagerFactory]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/javax/net/ssl/KeyManagerFactory.java
-[KeyStore]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/java/security/KeyStore.java
+[KeyManagerFactory]: https://github.com/openjdk/jdk/blob/jdk-27-ga/src/java.base/share/classes/javax/net/ssl/KeyManagerFactory.java
+[KeyStore]: https://github.com/openjdk/jdk/blob/jdk-27-ga/src/java.base/share/classes/java/security/KeyStore.java
 [MockitoBean]: https://github.com/spring-projects/spring-framework/blob/v7.0.9/spring-test/src/main/java/org/springframework/test/context/bean/override/mockito/MockitoBean.java
 [PropertiesSslBundle]: https://github.com/spring-projects/spring-boot/blob/v4.1.1/core/spring-boot-autoconfigure/src/main/java/org/springframework/boot/autoconfigure/ssl/PropertiesSslBundle.java
 [Request]: https://github.com/OpenFeign/feign/blob/13.6.1/core/src/main/java/feign/Request.java
@@ -1035,11 +1035,11 @@ More on the private key itself: [the producer README's 13.6](../service-producer
 [SslBundle]: https://github.com/spring-projects/spring-boot/blob/v4.1.1/core/spring-boot/src/main/java/org/springframework/boot/ssl/SslBundle.java
 [SslBundles]: https://github.com/spring-projects/spring-boot/blob/v4.1.1/core/spring-boot/src/main/java/org/springframework/boot/ssl/SslBundles.java
 [SslConnectorCustomizer]: https://github.com/spring-projects/spring-boot/blob/v4.1.1/module/spring-boot-tomcat/src/main/java/org/springframework/boot/tomcat/SslConnectorCustomizer.java
-[SSLContext]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/javax/net/ssl/SSLContext.java
-[SSLEngine]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/javax/net/ssl/SSLEngine.java
-[SSLHandshakeException]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/javax/net/ssl/SSLHandshakeException.java
-[SSLParameters]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/javax/net/ssl/SSLParameters.java
+[SSLContext]: https://github.com/openjdk/jdk/blob/jdk-27-ga/src/java.base/share/classes/javax/net/ssl/SSLContext.java
+[SSLEngine]: https://github.com/openjdk/jdk/blob/jdk-27-ga/src/java.base/share/classes/javax/net/ssl/SSLEngine.java
+[SSLHandshakeException]: https://github.com/openjdk/jdk/blob/jdk-27-ga/src/java.base/share/classes/javax/net/ssl/SSLHandshakeException.java
+[SSLParameters]: https://github.com/openjdk/jdk/blob/jdk-27-ga/src/java.base/share/classes/javax/net/ssl/SSLParameters.java
 [SslPropertiesBundleRegistrar]: https://github.com/spring-projects/spring-boot/blob/v4.1.1/core/spring-boot-autoconfigure/src/main/java/org/springframework/boot/autoconfigure/ssl/SslPropertiesBundleRegistrar.java
 [TomcatWebServerFactory]: https://github.com/spring-projects/spring-boot/blob/v4.1.1/module/spring-boot-tomcat/src/main/java/org/springframework/boot/tomcat/TomcatWebServerFactory.java
-[TrustManagerFactory]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/javax/net/ssl/TrustManagerFactory.java
+[TrustManagerFactory]: https://github.com/openjdk/jdk/blob/jdk-27-ga/src/java.base/share/classes/javax/net/ssl/TrustManagerFactory.java
 [WebMvcTest]: https://github.com/spring-projects/spring-boot/blob/v4.1.1/module/spring-boot-webmvc-test/src/main/java/org/springframework/boot/webmvc/test/autoconfigure/WebMvcTest.java

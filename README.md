@@ -97,7 +97,7 @@ flowchart LR
 
 ```
 org.springframework.boot:spring-boot-starter-parent:4.1.1
-└── com.org.llm:super-pom:1.1.3           (Java 25, learning-bom, build-info, git-commit-id, enforcer, Surefire/Failsafe, profiles)
+└── com.org.llm:super-pom:1.2.0           (Java 27, learning-bom, build-info, git-commit-id, enforcer, Surefire/Failsafe, profiles)
     └── com.org.mtls:learning-mtls        (this aggregator — shared deps: webmvc, actuator, Lombok, DevTools, webmvc-test;
         │                                  manages jasypt-spring-boot-starter 4.0.4)
         ├── service-producer
@@ -106,7 +106,7 @@ org.springframework.boot:spring-boot-starter-parent:4.1.1
 
 `super-pom` is **not on Maven Central**. The aggregator declares it with an empty `<relativePath/>`,
 so it must already be in your local repository (`mvn install` it from its own project). Its enforcer
-accepts Java 21+ and Maven 3.9+, but `maven.compiler.release` is 25, so the build needs **JDK 25 or
+requires Java 27+ and Maven 3.9+, and `maven.compiler.release` is 27, so the build needs **JDK 27 or
 newer**. `learning-bom` also imports Spring Cloud 2025.1.3, which declares Boot 4.0.x and 4.1.x
 compatible. The consumer's OpenFeign and Feign versions come from there.
 
@@ -862,7 +862,8 @@ What TLS changes, and what it doesn't:
   none. The producer has one certificate and ignores it (`no server name matchers` in the trace).
 - **The ClientHello is 1,564 bytes** mostly because OpenSSL 3.5 also sends a post-quantum hybrid
   key share (`X25519MLKEM768`, group 4588). JDK 25 doesn't support it, so the producer picks
-  `x25519`.
+  `x25519`. JDK 27, which this project now runs on, does: against a JDK 27 producer the same
+  handshake negotiates `X25519MLKEM768` (see [10.4](#negotiated-parameters)).
 - **After the ServerHello, records are disguised.** Every encrypted record says
   `application_data` and TLS 1.2 in its header; the real type is inside. That's why the trace
   shows the client's certificate as `READ: TLSv1.2 application_data, length = 2576`.
@@ -1104,7 +1105,7 @@ services negotiate. TLS 1.1 and below are refused.
 TLS 1.3:   TLS _ AES_256_GCM _ SHA384
                   │             └── hash for HKDF key schedule + transcript
                   └── AEAD record cipher (AES, 256-bit key, GCM mode)
-           key exchange   → negotiated via "supported_groups"      (X25519)
+           key exchange   → negotiated via "supported_groups"      (X25519MLKEM768 on JDK 27)
            authentication → negotiated via "signature_algorithms"  (rsa_pss_rsae_sha256)
 
 TLS 1.2:   ECDHE - RSA - AES256-GCM - SHA384
@@ -1117,13 +1118,13 @@ TLS 1.2:   ECDHE - RSA - AES256-GCM - SHA384
 <a id="negotiated-parameters"></a>
 ### <span style="color:hsl(165,80%,45%)">10.4 What this project actually negotiates</span>
 
-Verified with `openssl s_client` (OpenSSL 3.5) and `-Djavax.net.debug=ssl:handshake` on the consumer (JDK 25 and JDK 26 give the same results):
+Verified with `openssl s_client` (OpenSSL 3.5) and `-Djavax.net.debug=ssl:handshake` on the consumer, both services on JDK 27. JDK 25 and 26 give the same results except the key exchange group: they don't implement the post-quantum hybrid `X25519MLKEM768`, so both columns negotiate plain `x25519` there.
 
 | Parameter | Consumer (JDK) → Producer | `openssl s_client` → Producer | `-tls1_2` forced |
 |---|---|---|---|
 | Protocol | **TLSv1.3** | TLSv1.3 | TLSv1.2 |
 | Cipher suite | `TLS_AES_256_GCM_SHA384` | `TLS_AES_256_GCM_SHA384` | `ECDHE-RSA-AES256-GCM-SHA384` |
-| Key exchange group | `x25519` | X25519 (253 bits) | X25519 (253 bits) |
+| Key exchange group | `X25519MLKEM768` | X25519MLKEM768 | X25519 (253 bits) — the hybrid group is TLS 1.3 only |
 | Server signature | `rsa_pss_rsae_sha256` | `rsa_pss_rsae_sha256` | `rsa_pss_rsae_sha256` (signs `ServerKeyExchange`) |
 | Client signature (`CertificateVerify`) | `rsa_pss_rsae_sha256` | — | — |
 | Server key | RSA 2048 | RSA 2048 | RSA 2048 |
@@ -1139,9 +1140,9 @@ sequenceDiagram
     participant C as service-consumer<br/>(Feign → JDK HttpClient)
     participant P as service-producer<br/>(Tomcat, client-auth=need)
 
-    C->>P: ClientHello: versions [1.3,1.2], suites, supported_groups, key_share(X25519 pub A), signature_algorithms, random
-    P->>C: ServerHello: TLS 1.3, TLS_AES_256_GCM_SHA384, key_share(X25519 pub B), random
-    Note over C,P: ECDHE shared secret → HKDF → handshake traffic keys<br/>🔒 everything below is encrypted
+    C->>P: ClientHello: versions [1.3,1.2], suites, supported_groups, key_share(ML-KEM-768 key + X25519 pub A), signature_algorithms, random
+    P->>C: ServerHello: TLS 1.3, TLS_AES_256_GCM_SHA384, key_share(ML-KEM-768 ciphertext + X25519 pub B), random
+    Note over C,P: hybrid shared secret (ML-KEM + ECDHE) → HKDF → handshake traffic keys<br/>🔒 everything below is encrypted
     P->>C: EncryptedExtensions
     P->>C: CertificateRequest: acceptable CA = "mTLS Demo Root CA", sig algs
     P->>C: Certificate: [service-producer leaf, CA]
@@ -1160,7 +1161,7 @@ sequenceDiagram
 
 | Step | Message | Why it matters |
 |---|---|---|
-| 1–2 | Hello messages + key shares | Agree on TLS 1.3 + suite; exchange ephemeral X25519 public keys |
+| 1–2 | Hello messages + key shares | Agree on TLS 1.3 + suite; exchange ephemeral key shares (X25519MLKEM768 on JDK 27: X25519 plus post-quantum ML-KEM-768) |
 | 3 | EncryptedExtensions | First encrypted message — rest of handshake hidden from observers |
 | 4 | **CertificateRequest** | Sent only because `client-auth: need`; lists acceptable CA names from the producer truststore |
 | 5–6 | Server Certificate + **CertificateVerify** | Cert is public; the signature proves the producer holds the private key *for this specific handshake* |
@@ -1175,7 +1176,7 @@ sequenceDiagram
 flowchart TB
     Z["0 (no PSK)"] --> E["HKDF-Extract → Early Secret"]
     E --> D1["Derive-Secret"]
-    ECDHE["ECDHE shared secret<br/>(X25519: a·B = b·A)"] --> H["HKDF-Extract → Handshake Secret"]
+    ECDHE["Hybrid shared secret (JDK 27)<br/>ML-KEM-768 secret ‖ X25519 a·B = b·A"] --> H["HKDF-Extract → Handshake Secret"]
     D1 --> H
     H --> CHTS["client_handshake_traffic_secret"]
     H --> SHTS["server_handshake_traffic_secret"]
@@ -1546,9 +1547,9 @@ Reading the trace:
 
 | Prerequisite | Why |
 |---|---|
-| JDK 25+ | `maven.compiler.release` is 25 (from super-pom) |
+| JDK 27+ | `maven.compiler.release` is 27 (from super-pom) |
 | Maven 3.9+ | Enforced by super-pom |
-| `com.org.llm:super-pom:1.1.3` in `~/.m2` | Parent POM; not on Maven Central (section 3) |
+| `com.org.llm:super-pom:1.2.0` in `~/.m2` | Parent POM; not on Maven Central (section 3) |
 | Docker | PostgreSQL via `docker compose`; Testcontainers during the build's tests |
 | `curl`, OpenSSL, `keytool` (ships with the JDK) | Calling the services; PEM extraction; cert scripts |
 
@@ -1742,18 +1743,18 @@ certificate configured, its trace shows `Fatal (CERTIFICATE_REQUIRED): Empty cli
 
 <!-- Library classes mentioned above, linked to their source at the versions this project builds with. -->
 
-[CertificateExpiredException]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/java/security/cert/CertificateExpiredException.java
+[CertificateExpiredException]: https://github.com/openjdk/jdk/blob/jdk-27-ga/src/java.base/share/classes/java/security/cert/CertificateExpiredException.java
 [Client]: https://github.com/OpenFeign/feign/blob/13.6.1/core/src/main/java/feign/Client.java
 [EncryptionOperationNotPossibleException]: https://github.com/jasypt/jasypt/blob/jasypt-1.9.3/jasypt/src/main/java/org/jasypt/exceptions/EncryptionOperationNotPossibleException.java
 [FeignClient]: https://github.com/spring-cloud/spring-cloud-openfeign/blob/v5.0.3/spring-cloud-openfeign-core/src/main/java/org/springframework/cloud/openfeign/FeignClient.java
 [Http11Processor]: https://github.com/apache/tomcat/blob/11.0.24/java/org/apache/coyote/http11/Http11Processor.java
-[HttpClient]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.net.http/share/classes/java/net/http/HttpClient.java
-[KeyManager]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/javax/net/ssl/KeyManager.java
-[LdapName]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.naming/share/classes/javax/naming/ldap/LdapName.java
+[HttpClient]: https://github.com/openjdk/jdk/blob/jdk-27-ga/src/java.net.http/share/classes/java/net/http/HttpClient.java
+[KeyManager]: https://github.com/openjdk/jdk/blob/jdk-27-ga/src/java.base/share/classes/javax/net/ssl/KeyManager.java
+[LdapName]: https://github.com/openjdk/jdk/blob/jdk-27-ga/src/java.naming/share/classes/javax/naming/ldap/LdapName.java
 [NioEndpoint]: https://github.com/apache/tomcat/blob/11.0.24/java/org/apache/tomcat/util/net/NioEndpoint.java
 [SecureNioChannel]: https://github.com/apache/tomcat/blob/11.0.24/java/org/apache/tomcat/util/net/SecureNioChannel.java
-[SecureRandom]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/java/security/SecureRandom.java
-[SSLContext]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/javax/net/ssl/SSLContext.java
-[SSLEngine]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/javax/net/ssl/SSLEngine.java
-[SSLHandshakeException]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/javax/net/ssl/SSLHandshakeException.java
-[TrustManager]: https://github.com/openjdk/jdk/blob/jdk-25-ga/src/java.base/share/classes/javax/net/ssl/TrustManager.java
+[SecureRandom]: https://github.com/openjdk/jdk/blob/jdk-27-ga/src/java.base/share/classes/java/security/SecureRandom.java
+[SSLContext]: https://github.com/openjdk/jdk/blob/jdk-27-ga/src/java.base/share/classes/javax/net/ssl/SSLContext.java
+[SSLEngine]: https://github.com/openjdk/jdk/blob/jdk-27-ga/src/java.base/share/classes/javax/net/ssl/SSLEngine.java
+[SSLHandshakeException]: https://github.com/openjdk/jdk/blob/jdk-27-ga/src/java.base/share/classes/javax/net/ssl/SSLHandshakeException.java
+[TrustManager]: https://github.com/openjdk/jdk/blob/jdk-27-ga/src/java.base/share/classes/javax/net/ssl/TrustManager.java
