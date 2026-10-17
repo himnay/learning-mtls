@@ -1,3 +1,8 @@
+server:
+  port: 9443
+  ssl:
+    bundle: service-consumer
+
 spring:
   application:
     name: service-consumer
@@ -22,11 +27,6 @@ spring:
             type: PKCS12
           options:
             enabled-protocols: TLSv1.3,TLSv1.2
-
-server:
-  port: 9443
-  ssl:
-    bundle: service-consumer
 
 clients:
   producer:

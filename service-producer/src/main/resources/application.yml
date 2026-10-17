@@ -1,3 +1,10 @@
+server:
+  port: 8443
+  ssl:
+    bundle: service-producer
+    # "need" = handshake fails unless the client presents a cert chaining to the truststore
+    client-auth: need
+
 spring:
   application:
     name: service-producer
@@ -35,13 +42,6 @@ jasypt:
     algorithm: PBEWITHHMACSHA512ANDAES_256
     key-obtention-iterations: 1000
     iv-generator-classname: org.jasypt.iv.RandomIvGenerator
-
-server:
-  port: 8443
-  ssl:
-    bundle: service-producer
-    # "need" = handshake fails unless the client presents a cert chaining to the truststore
-    client-auth: need
 
 mtls:
   allowed-client-cns:
