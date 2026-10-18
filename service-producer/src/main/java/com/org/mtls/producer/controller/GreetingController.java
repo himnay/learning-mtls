@@ -1,5 +1,6 @@
 package com.org.mtls.producer.controller;
 
+import com.org.mtls.producer.dto.Greeting;
 import com.org.mtls.producer.entites.GreetingTemplate;
 import com.org.mtls.producer.repository.GreetingTemplateRepository;
 import com.org.mtls.producer.filter.ClientCertificateFilter;
@@ -15,8 +16,8 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
 @RestController
-@RequestMapping("/api/v1/greetings")
 @RequiredArgsConstructor
+@RequestMapping("/api/v1/greetings")
 public class GreetingController {
 
     private final GreetingTemplateRepository repository;
@@ -32,6 +33,4 @@ public class GreetingController {
 
         return new Greeting(template.template().formatted(name), lang, "service-producer", clientCn, Instant.now());
     }
-
-    public record Greeting(String message, String language, String servedBy, String callerCn, Instant timestamp) {}
 }

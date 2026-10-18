@@ -1,7 +1,7 @@
 package com.org.mtls.consumer.client;
 
 import com.org.mtls.consumer.config.ProducerFeignConfiguration;
-import java.time.Instant;
+import com.org.mtls.consumer.dto.Greeting;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -16,6 +16,4 @@ public interface ProducerClient {
 
     @GetMapping("/api/v1/greetings/{name}")
     Greeting fetchGreeting(@PathVariable("name") String name, @RequestParam("lang") String lang);
-
-    record Greeting(String message, String language, String servedBy, String callerCn, Instant timestamp) {}
 }

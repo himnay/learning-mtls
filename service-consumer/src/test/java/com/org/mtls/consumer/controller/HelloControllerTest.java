@@ -6,7 +6,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.org.mtls.consumer.client.ProducerClient;
-import com.org.mtls.consumer.client.ProducerClient.Greeting;
+import com.org.mtls.consumer.dto.Greeting;
 import feign.FeignException;
 import feign.Request;
 import feign.RetryableException;
