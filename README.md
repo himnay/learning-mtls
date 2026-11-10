@@ -96,7 +96,7 @@ flowchart LR
 ## <span style="color:hsl(331,80%,58%)">3. 🏗️ Maven structure</span>
 
 ```
-org.springframework.boot:spring-boot-starter-parent:4.1.1
+org.springframework.boot:spring-boot-starter-parent:4.1.2
 └── com.org.llm:super-pom:1.2.0           (Java 27, learning-bom, build-info, git-commit-id, enforcer, Surefire/Failsafe, profiles)
     └── com.org.mtls:learning-mtls        (this aggregator — shared deps: webmvc, actuator, Lombok, DevTools, webmvc-test;
         │                                  manages jasypt-spring-boot-starter 4.0.4)

@@ -30,7 +30,7 @@
 | Component    | Version / Detail                                                                                  |
 |--------------|---------------------------------------------------------------------------------------------------|
 | Java         | 27 (`maven.compiler.release` from super-pom; needs JDK 27+)                                       |
-| Spring Boot  | 4.1.1 (via `learning-mtls` → `super-pom`)                                                         |
+| Spring Boot  | 4.1.2 (via `learning-mtls` → `super-pom`)                                                         |
 | Spring Cloud | 2025.1.3 (via `learning-bom`): OpenFeign 5.0.3                                                    |
 | Web          | Spring MVC on embedded Tomcat, HTTPS (port `9443`)                                                |
 | HTTP client  | Feign 13.6.1 [`@FeignClient`][FeignClient] on the JDK [`HttpClient`][HttpClient] (`feign-java11`) |

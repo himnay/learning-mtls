@@ -38,7 +38,7 @@
 | Component         | Version / Detail                                                        |
 |-------------------|-------------------------------------------------------------------------|
 | Java              | 27 (`maven.compiler.release` from super-pom; needs JDK 27+)             |
-| Spring Boot       | 4.1.1 (via `learning-mtls` → `super-pom`)                               |
+| Spring Boot       | 4.1.2 (via `learning-mtls` → `super-pom`)                               |
 | Web               | Spring MVC on embedded Tomcat, HTTPS only (port `8443`)                 |
 | TLS               | Spring Boot SSL bundles, PKCS12, TLS 1.3 / 1.2                          |
 | Persistence       | Spring Data JDBC + PostgreSQL 19 (beta3), HikariCP                      |
